@@ -1,0 +1,6 @@
+config NDCKPT
+tristate "In-kernel Checkpointing with NVDIMM"
+depends on LIBNVDIMM
+default m
+help
+ndckpt app
