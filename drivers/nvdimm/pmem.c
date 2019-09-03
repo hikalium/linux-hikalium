@@ -38,6 +38,12 @@
 #include "nd.h"
 #include "nd-core.h"
 
+static struct pmem_device *first_pmem_device;
+
+struct pmem_device *get_first_pmem_device(void) {
+  return first_pmem_device;
+}
+
 static struct device *to_dev(struct pmem_device *pmem)
 {
 	/*
@@ -490,6 +496,11 @@ static int pmem_attach_disk(struct device *dev,
 					  "badblocks");
 	if (!pmem->bb_state)
 		dev_warn(dev, "'badblocks' notification disabled\n");
+
+  printk("pmem: phys_addr: 0x%016llx\n", pmem->phys_addr);
+  printk("pmem: size     : 0x%08lx\n", pmem->size);
+  printk("pmem: virt_addr: 0x%016llx\n", (unsigned long long)pmem->virt_addr);
+  if(!first_pmem_device) first_pmem_device = pmem;
 
 	return 0;
 }
