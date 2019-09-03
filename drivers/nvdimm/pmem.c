@@ -38,11 +38,9 @@
 #include "nd.h"
 #include "nd-core.h"
 
-static struct pmem_device *first_pmem_device;
-
-struct pmem_device *get_first_pmem_device(void) {
-  return first_pmem_device;
-}
+#ifdef CONFIG_NDCKPT
+extern void ndckpt_notify_pmem(struct pmem_device *pmem);
+#endif
 
 static struct device *to_dev(struct pmem_device *pmem)
 {
@@ -500,7 +498,10 @@ static int pmem_attach_disk(struct device *dev,
   printk("pmem: phys_addr: 0x%016llx\n", pmem->phys_addr);
   printk("pmem: size     : 0x%08lx\n", pmem->size);
   printk("pmem: virt_addr: 0x%016llx\n", (unsigned long long)pmem->virt_addr);
-  if(!first_pmem_device) first_pmem_device = pmem;
+
+#ifdef CONFIG_NDCKPT
+  ndckpt_notify_pmem(pmem);
+#endif
 
 	return 0;
 }

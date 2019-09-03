@@ -542,39 +542,6 @@ void __init __weak arch_call_rest_init(void)
 	rest_init();
 }
 
-static void ndckpt_allocator_init(void)
-{
-  struct acpi_table_header *nfit;
-  acpi_status status = AE_OK;
-  acpi_physical_address rsdp;
-
-  printk("ndckpt_allocator_init\n");
-  rsdp = acpi_os_get_root_pointer();
-  pr_info("rsdp = %016lX\n", (uintptr_t)rsdp);
-  status = acpi_get_table(ACPI_SIG_NFIT, 0, &nfit);
-  if (ACPI_FAILURE(status)) {
-    pr_warn("ndckpt_allocator_init: failed to find NFIT\n");
-  }
-  pr_info("nfit = %016lX size=%d\n", (uintptr_t)nfit, nfit->length);
-  struct acpi_nfit_header *eh = (struct acpi_nfit_header *)((uintptr_t)nfit + sizeof(struct acpi_table_nfit));
-  for(; (uintptr_t)eh - (uintptr_t)nfit < nfit->length;
-      eh = (struct acpi_nfit_header *)((uintptr_t)eh + eh->length)) {
-    if(eh->type == ACPI_NFIT_TYPE_SYSTEM_ADDRESS) {
-      // SPA Range
-      struct acpi_nfit_system_address *spa_range = (struct acpi_nfit_system_address *)eh;
-      u64 begin = spa_range->address;
-      u64 size = spa_range->length;
-      pr_info("  SPARange %2u: [%016llX - %016llX)\n", spa_range->range_index, begin, begin + size);
-      u8 *begin_virt = ioremap(begin, size);
-      pr_info("             virt=%016lX value=%02X\n", (uintptr_t)begin_virt, *begin_virt);
-      (*begin_virt)++;
-      continue;
-    }
-    pr_info("  nfit ent: type=%u size=%u\n", eh->type, eh->length);
-  }
-
-}
-
 asmlinkage __visible void __init start_kernel(void)
 {
 	char *command_line;
@@ -776,8 +743,6 @@ asmlinkage __visible void __init start_kernel(void)
 	arch_post_acpi_subsys_init();
 	sfi_init_late();
   
-  ndckpt_allocator_init();
-
 	/* Do the rest non-__init'ed, we're now alive */
 	arch_call_rest_init();
 }

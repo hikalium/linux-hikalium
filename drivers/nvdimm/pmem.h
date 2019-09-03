@@ -26,8 +26,6 @@ struct pmem_device {
 	struct dev_pagemap	pgmap;
 };
 
-struct pmem_device *get_first_pmem_device(void);
-
 long __pmem_direct_access(struct pmem_device *pmem, pgoff_t pgoff,
 		long nr_pages, void **kaddr, pfn_t *pfn);
 
