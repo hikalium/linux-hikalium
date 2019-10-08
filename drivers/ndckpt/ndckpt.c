@@ -11,7 +11,7 @@
 #include "ndckpt.h"
 
 static struct pmem_device *first_pmem_device;
-static struct kobject *kobj_cmd;
+static struct kobject *kobj_ndckpt;
 
 #define kRangeExpMin 10
 #define kRangeExpMax 24
@@ -60,9 +60,8 @@ void TestMem(int *array)
 	y = 0;
 	x = 1;
 	result_array[0][0] = 0;
-	for (stride = 1; stride <= kRangeMax / 2; stride = stride * 2) {
-		result_array[0][x] = stride;
-		x++;
+	for (x = 1; x < kResultArraySize; x++) {
+		result_array[0][x] = x * sizeof(int);
 	}
 
 	//ClearIntFlag();
@@ -149,7 +148,6 @@ static ssize_t cmd_show(struct kobject *kobj, struct kobj_attribute *attr,
 	//count = sprintf(buf, "0x%08lx\n", read_cr0());
 	return count_sum;
 }
-
 static ssize_t cmd_store(struct kobject *kobj, struct kobj_attribute *attr,
 			 const char *buf, size_t count)
 {
@@ -168,9 +166,23 @@ static ssize_t cmd_store(struct kobject *kobj, struct kobj_attribute *attr,
 	}
 	return count;
 }
-
 static struct kobj_attribute cmd_attribute =
 	__ATTR(cmd, 0660, cmd_show, cmd_store);
+
+static ssize_t objs_show(struct kobject *kobj, struct kobj_attribute *attr,
+			 char *buf)
+{
+	int count;
+	count = sprintf(buf, "objs_show\n");
+	return count;
+}
+static ssize_t objs_store(struct kobject *kobj, struct kobj_attribute *attr,
+			  const char *buf, size_t count)
+{
+	return 0;
+}
+static struct kobj_attribute objs_attribute =
+	__ATTR(objs, 0660, objs_show, objs_store);
 
 void ndckpt_notify_pmem(struct pmem_device *pmem)
 {
@@ -185,25 +197,37 @@ void ndckpt_notify_pmem(struct pmem_device *pmem)
 }
 EXPORT_SYMBOL(ndckpt_notify_pmem);
 
+static int add_sysfs_kobj(const char *name, struct kobj_attribute *attr)
+{
+	int error = 0;
+	error = sysfs_create_file(kobj_ndckpt, &attr->attr);
+	if (error) {
+		printk("ndckpt: failed to create /sys/kernel/ndckpt/%s\n",
+		       name);
+		return -1;
+	}
+	return 0;
+}
+
 static int __init ndckpt_module_init(void)
 {
 	int error = 0;
 	printk("ndckpt: module init\n");
-	kobj_cmd = kobject_create_and_add("ndckpt", kernel_kobj);
-	if (!kobj_cmd) {
-		printk("ndckpt: kobj_cmd failed.\n");
+	kobj_ndckpt = kobject_create_and_add("ndckpt", kernel_kobj);
+	if (!kobj_ndckpt) {
+		printk("ndckpt: kobject_create_and_add failed.\n");
 		return -ENOMEM;
 	}
-	error = sysfs_create_file(kobj_cmd, &cmd_attribute.attr);
-	if (error) {
-		printk("ndckpt: failed to create /sys/kernel/ndckpt/kobj\n");
-	}
+	if ((error = add_sysfs_kobj("cmd", &cmd_attribute)))
+		return error;
+	if ((error = add_sysfs_kobj("objs", &objs_attribute)))
+		return error;
 	return 0;
 }
 static void __exit ndckpt_module_cleanup(void)
 {
 	printk("ndckpt: module cleanup\n");
-	kobject_put(kobj_cmd);
+	kobject_put(kobj_ndckpt);
 	return;
 }
 
