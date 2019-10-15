@@ -60,7 +60,7 @@ bool pobj_is_valid(struct PersistentObjectHeader *pobj)
 }
 
 void pobj_init(struct PersistentObjectHeader *pobj, uint64_t id,
-	       uint64_t num_of_pages)
+	       uint64_t num_of_pages, struct PersistentObjectHeader *next)
 {
 	// First, invalidate pobj
 	pobj->signature = ~POBJ_SIGNATURE;
@@ -69,7 +69,7 @@ void pobj_init(struct PersistentObjectHeader *pobj, uint64_t id,
 	// Initialize metadata and flush
 	pobj->id = id;
 	pobj->num_of_pages = num_of_pages;
-	pobj->next = NULL;
+	pobj->next = next;
 	ndckpt_clwb_range(pobj, sizeof(*pobj));
 	ndckpt_sfence();
 	// Mark as valid and flush
@@ -85,10 +85,10 @@ void *pobj_get_base(struct PersistentObjectHeader *pobj)
 
 void pobj_printk(struct PersistentObjectHeader *pobj)
 {
-	printk("Object #%lldd is %s\n", pobj->id,
+	printk("Object #%lld is %s\n", pobj->id,
 	       pobj_is_valid(pobj) ? "valid" : "INVALID");
-	printk("  base         0x%016llX\n", (uint64_t)pobj_get_base(pobj));
-	printk("  num_of_pages 0x%016llX\n", pobj->num_of_pages);
+	printk("  base(virtual) 0x%016llX\n", (uint64_t)pobj_get_base(pobj));
+	printk("  num_of_pages  %16lld\n", pobj->num_of_pages);
 }
 
 bool pman_is_valid(struct PersistentMemoryManager *pman)
@@ -121,7 +121,7 @@ void pman_init(struct pmem_device *pmem)
 	// Set sentinel as head.
 	// Head is always the last element in the pmem region and we can calcurate
 	// a start address of the next free region by using head
-	pobj_init(&pman->sentinel, 0, 0);
+	pobj_init(&pman->sentinel, 0, 0, NULL);
 	pman_update_head(pman, &pman->sentinel);
 
 	// Mark as valid and flush
@@ -129,6 +129,28 @@ void pman_init(struct pmem_device *pmem)
 	ndckpt_clwb(&pman->signature);
 	ndckpt_sfence();
 	printk("ndckpt: pman init done\n");
+}
+
+void *pman_alloc_pages(struct PersistentMemoryManager *pman,
+		       uint64_t num_of_pages_requested)
+{
+	struct PersistentObjectHeader *new_obj;
+	struct PersistentObjectHeader *const head = pman->head;
+	const uint64_t next_page_idx =
+		((uint64_t)pobj_get_base(head) >> kPageSizeExponent) +
+		head->num_of_pages;
+	if (num_of_pages_requested > pman->num_of_pages ||
+	    num_of_pages_requested + 1 + next_page_idx >=
+		    pman->page_idx + pman->num_of_pages) {
+		printk("ndckpt: !!!!!!!!!! No more pages\n");
+		return NULL;
+	}
+	new_obj = (struct PersistentObjectHeader *)(((next_page_idx + 1)
+						     << kPageSizeExponent) -
+						    sizeof(*new_obj));
+	pobj_init(new_obj, head->id + 1, num_of_pages_requested, head);
+	pman_update_head(pman, new_obj);
+	return pobj_get_base(new_obj);
 }
 
 void pman_printk(struct PersistentMemoryManager *pman)
@@ -344,6 +366,26 @@ static ssize_t init_store(struct kobject *kobj, struct kobj_attribute *attr,
 static struct kobj_attribute init_attribute =
 	__ATTR(init, 0660, init_show, init_store);
 
+static ssize_t alloc_show(struct kobject *kobj, struct kobj_attribute *attr,
+			  char *buf)
+{
+	return 0;
+}
+static ssize_t alloc_store(struct kobject *kobj, struct kobj_attribute *attr,
+			   const char *buf, size_t count)
+{
+	int pages;
+	void *vaddr;
+	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
+	sscanf(buf, "%d", &pages);
+	printk("ndckpt: alloc_store size=%d\n", pages);
+	vaddr = pman_alloc_pages(pman, pages);
+	printk("ndckpt: alloc_store vaddr=0x%08llX\n", (uint64_t)vaddr);
+	return count;
+}
+static struct kobj_attribute alloc_attribute =
+	__ATTR(alloc, 0660, alloc_show, alloc_store);
+
 void ndckpt_notify_pmem(struct pmem_device *pmem)
 {
 	if (!first_pmem_device) {
@@ -383,6 +425,8 @@ static int __init ndckpt_module_init(void)
 	if ((error = add_sysfs_kobj("objs", &objs_attribute)))
 		return error;
 	if ((error = add_sysfs_kobj("init", &init_attribute)))
+		return error;
+	if ((error = add_sysfs_kobj("alloc", &alloc_attribute)))
 		return error;
 
 	return 0;
