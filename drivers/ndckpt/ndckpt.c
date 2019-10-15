@@ -10,26 +10,113 @@
 #include "../nvdimm/pmem.h"
 #include "ndckpt.h"
 
+static const uint64_t kCacheLineSize = 64;
+static const uint64_t kPageSizeExponent = 12;
+
+static inline void ndckpt_clwb(volatile void *__p)
+{
+	asm volatile("clwb %0" : "+m"(*(volatile char __force *)__p));
+}
+
+static inline void ndckpt_clwb_range(volatile void *p, size_t byte_size)
+{
+	const uint64_t end_addr = (uint64_t)p + byte_size;
+	const size_t num_of_lines =
+		((end_addr - ((uint64_t)p & ~(kCacheLineSize - 1))) +
+		 kCacheLineSize - 1) /
+		kCacheLineSize;
+	size_t i;
+	for (i = 0; i < num_of_lines; i++) {
+		ndckpt_clwb(p);
+		p = (volatile uint8_t *)p + kCacheLineSize;
+	}
+}
+
+static inline void ndckpt_sfence(void)
+{
+	asm volatile("sfence");
+}
+
 #define POBJ_SIGNATURE 0x4F50534F6D75696CULL
 struct PersistentObjectHeader {
-	uint64_t signature;
-	uint64_t id;
-	uint64_t num_of_pages;
-	struct PersistentObjectHeader *next;
+	volatile uint64_t signature;
+	volatile uint64_t id;
+	volatile uint64_t num_of_pages;
+	volatile struct PersistentObjectHeader *next;
 };
 
 #define PMAN_SIGNATURE 0x4D50534F6D75696CULL
 struct PersistentMemoryManager {
-	uint64_t page_phys_idx;
-	uint64_t num_of_pages;
-	struct PersistentObjectHeader *head;
+	volatile uint64_t page_idx; // in virtual addr
+	volatile uint64_t num_of_pages;
+	volatile struct PersistentObjectHeader *head;
 	struct PersistentObjectHeader sentinel;
-	uint64_t signature;
+	volatile uint64_t signature;
 };
+
+bool pobj_is_valid(struct PersistentObjectHeader *pobj)
+{
+	return pobj && pobj->signature == POBJ_SIGNATURE;
+}
+
+void pobj_init(struct PersistentObjectHeader *pobj, uint64_t id,
+	       uint64_t num_of_pages)
+{
+	// First, invalidate pobj
+	pobj->signature = ~POBJ_SIGNATURE;
+	ndckpt_clwb(&pobj->signature);
+	ndckpt_sfence();
+	// Initialize metadata and flush
+	pobj->id = id;
+	pobj->num_of_pages = num_of_pages;
+	pobj->next = NULL;
+	ndckpt_clwb_range(pobj, sizeof(*pobj));
+	ndckpt_sfence();
+	// Mark as valid and flush
+	pobj->signature = POBJ_SIGNATURE;
+	ndckpt_clwb(&pobj->signature);
+	ndckpt_sfence();
+}
 
 bool pman_is_valid(struct PersistentMemoryManager *pman)
 {
 	return pman && pman->signature == PMAN_SIGNATURE;
+}
+
+void pman_update_head(struct PersistentMemoryManager *pman,
+		      struct PersistentObjectHeader *pobj)
+{
+	pman->head = pobj;
+	ndckpt_clwb(&pman->head);
+	ndckpt_sfence();
+}
+
+void pman_init(struct pmem_device *pmem)
+{
+	printk("ndckpt: pman init\n");
+	struct PersistentMemoryManager *pman = pmem->virt_addr;
+	// First, invalidate pman
+	pman->signature = ~PMAN_SIGNATURE;
+	ndckpt_clwb(&pman->signature);
+	ndckpt_sfence();
+	// Initialize metadata and flush
+	pman->page_idx = (uint64_t)pmem->virt_addr >> kPageSizeExponent;
+	pman->num_of_pages = pmem->size >> kPageSizeExponent;
+	pman->head = NULL;
+	ndckpt_clwb_range(pman, sizeof(*pman));
+	ndckpt_sfence();
+
+	// Set sentinel as head.
+	// Head is always the last element in the pmem region and we can calcurate
+	// a start address of the next free region by using head
+	pobj_init(&pman->sentinel, 0, 0);
+	pman_update_head(pman, &pman->sentinel);
+
+	// Mark as valid and flush
+	pman->signature = PMAN_SIGNATURE;
+	ndckpt_clwb(&pman->signature);
+	ndckpt_sfence();
+	printk("ndckpt: pman init done\n");
 }
 
 static struct pmem_device *first_pmem_device;
@@ -201,7 +288,7 @@ static ssize_t objs_show(struct kobject *kobj, struct kobj_attribute *attr,
 static ssize_t objs_store(struct kobject *kobj, struct kobj_attribute *attr,
 			  const char *buf, size_t count)
 {
-	return 0;
+	return count;
 }
 static struct kobj_attribute objs_attribute =
 	__ATTR(objs, 0660, objs_show, objs_store);
@@ -221,7 +308,9 @@ static ssize_t init_show(struct kobject *kobj, struct kobj_attribute *attr,
 static ssize_t init_store(struct kobject *kobj, struct kobj_attribute *attr,
 			  const char *buf, size_t count)
 {
-	return 0;
+	printk("ndckpt: init_store\n");
+	pman_init(first_pmem_device);
+	return count;
 }
 static struct kobj_attribute init_attribute =
 	__ATTR(init, 0660, init_show, init_store);
