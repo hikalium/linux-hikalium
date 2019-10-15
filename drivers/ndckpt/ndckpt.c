@@ -10,6 +10,28 @@
 #include "../nvdimm/pmem.h"
 #include "ndckpt.h"
 
+#define POBJ_SIGNATURE 0x4F50534F6D75696CULL
+struct PersistentObjectHeader {
+	uint64_t signature;
+	uint64_t id;
+	uint64_t num_of_pages;
+	struct PersistentObjectHeader *next;
+};
+
+#define PMAN_SIGNATURE 0x4D50534F6D75696CULL
+struct PersistentMemoryManager {
+	uint64_t page_phys_idx;
+	uint64_t num_of_pages;
+	struct PersistentObjectHeader *head;
+	struct PersistentObjectHeader sentinel;
+	uint64_t signature;
+};
+
+bool pman_is_valid(struct PersistentMemoryManager *pman)
+{
+	return pman && pman->signature == PMAN_SIGNATURE;
+}
+
 static struct pmem_device *first_pmem_device;
 static struct kobject *kobj_ndckpt;
 
@@ -184,6 +206,26 @@ static ssize_t objs_store(struct kobject *kobj, struct kobj_attribute *attr,
 static struct kobj_attribute objs_attribute =
 	__ATTR(objs, 0660, objs_show, objs_store);
 
+static ssize_t init_show(struct kobject *kobj, struct kobj_attribute *attr,
+			 char *buf)
+{
+	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
+	int count;
+	if (pman_is_valid(pman)) {
+		count = sprintf(buf, "pman is valid\n");
+	} else {
+		count = sprintf(buf, "pman is INVALID\n");
+	}
+	return count;
+}
+static ssize_t init_store(struct kobject *kobj, struct kobj_attribute *attr,
+			  const char *buf, size_t count)
+{
+	return 0;
+}
+static struct kobj_attribute init_attribute =
+	__ATTR(init, 0660, init_show, init_store);
+
 void ndckpt_notify_pmem(struct pmem_device *pmem)
 {
 	if (!first_pmem_device) {
@@ -222,6 +264,9 @@ static int __init ndckpt_module_init(void)
 		return error;
 	if ((error = add_sysfs_kobj("objs", &objs_attribute)))
 		return error;
+	if ((error = add_sysfs_kobj("init", &init_attribute)))
+		return error;
+
 	return 0;
 }
 static void __exit ndckpt_module_cleanup(void)
