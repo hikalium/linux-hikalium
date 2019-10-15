@@ -386,6 +386,43 @@ static ssize_t alloc_store(struct kobject *kobj, struct kobj_attribute *attr,
 static struct kobj_attribute alloc_attribute =
 	__ATTR(alloc, 0660, alloc_show, alloc_store);
 
+static ssize_t pid_show(struct kobject *kobj, struct kobj_attribute *attr,
+			  char *buf)
+{
+	return 0;
+}
+static ssize_t pid_store(struct kobject *kobj, struct kobj_attribute *attr,
+			   const char *buf, size_t count)
+{
+	int pid;
+  struct pid *p;
+  struct task_struct *t;
+	sscanf(buf, "%d", &pid);
+	printk("ndckpt: pid_store pid=%d\n", pid);
+  p = find_get_pid(pid);
+  if(!p) {
+	  printk("ndckpt: pid not found\n");
+    return count; 
+  }
+  t = pid_task(p, PIDTYPE_PID);
+  if(!t) {
+	  printk("ndckpt: task_struct not found\n");
+    return count; 
+  }
+	printk("ndckpt: task_struct found. pid = %d\n", t->pid);
+  struct mm_struct *mm = t->mm;
+  struct vm_area_struct *vma = mm->mmap;
+	printk("ndckpt: vm_area_struct@0x%016llX\n", vma);
+	printk("ndckpt:   vm_start = 0x%016llX\n", vma->vm_start);
+	printk("ndckpt:   vm_end   = 0x%016llX\n", vma->vm_end);
+	printk("ndckpt:   vm_next   = 0x%016llX\n", vma->vm_next);
+	printk("ndckpt:   vm_prev   = 0x%016llX\n", vma->vm_prev);
+
+	return count;
+}
+static struct kobj_attribute pid_attribute =
+	__ATTR(pid, 0660, pid_show, pid_store);
+
 void ndckpt_notify_pmem(struct pmem_device *pmem)
 {
 	if (!first_pmem_device) {
@@ -427,6 +464,8 @@ static int __init ndckpt_module_init(void)
 	if ((error = add_sysfs_kobj("init", &init_attribute)))
 		return error;
 	if ((error = add_sysfs_kobj("alloc", &alloc_attribute)))
+		return error;
+	if ((error = add_sysfs_kobj("pid", &pid_attribute)))
 		return error;
 
 	return 0;
