@@ -42,14 +42,14 @@ struct PersistentObjectHeader {
 	volatile uint64_t signature;
 	volatile uint64_t id;
 	volatile uint64_t num_of_pages;
-	volatile struct PersistentObjectHeader *next;
+	struct PersistentObjectHeader *volatile next;
 };
 
 #define PMAN_SIGNATURE 0x4D50534F6D75696CULL
 struct PersistentMemoryManager {
 	volatile uint64_t page_idx; // in virtual addr
 	volatile uint64_t num_of_pages;
-	volatile struct PersistentObjectHeader *head;
+	struct PersistentObjectHeader *volatile head;
 	struct PersistentObjectHeader sentinel;
 	volatile uint64_t signature;
 };
@@ -78,6 +78,19 @@ void pobj_init(struct PersistentObjectHeader *pobj, uint64_t id,
 	ndckpt_sfence();
 }
 
+void *pobj_get_base(struct PersistentObjectHeader *pobj)
+{
+	return (uint8_t *)pobj + sizeof(*pobj);
+}
+
+void pobj_printk(struct PersistentObjectHeader *pobj)
+{
+	printk("Object #%lldd is %s\n", pobj->id,
+	       pobj_is_valid(pobj) ? "valid" : "INVALID");
+	printk("  base         0x%016llX\n", (uint64_t)pobj_get_base(pobj));
+	printk("  num_of_pages 0x%016llX\n", pobj->num_of_pages);
+}
+
 bool pman_is_valid(struct PersistentMemoryManager *pman)
 {
 	return pman && pman->signature == PMAN_SIGNATURE;
@@ -93,7 +106,6 @@ void pman_update_head(struct PersistentMemoryManager *pman,
 
 void pman_init(struct pmem_device *pmem)
 {
-	printk("ndckpt: pman init\n");
 	struct PersistentMemoryManager *pman = pmem->virt_addr;
 	// First, invalidate pman
 	pman->signature = ~PMAN_SIGNATURE;
@@ -117,6 +129,21 @@ void pman_init(struct pmem_device *pmem)
 	ndckpt_clwb(&pman->signature);
 	ndckpt_sfence();
 	printk("ndckpt: pman init done\n");
+}
+
+void pman_printk(struct PersistentMemoryManager *pman)
+{
+	struct PersistentObjectHeader *pobj;
+	printk("PMAN at 0x%016llX\n", (uint64_t)pman);
+	if (!pman_is_valid(pman)) {
+		printk("  INVALID\n");
+		return;
+	}
+	printk("  region size in byte: %lld\n",
+	       pman->num_of_pages << kPageSizeExponent);
+	for (pobj = pman->head; pobj; pobj = pobj->next) {
+		pobj_printk(pobj);
+	}
 }
 
 static struct pmem_device *first_pmem_device;
@@ -288,6 +315,8 @@ static ssize_t objs_show(struct kobject *kobj, struct kobj_attribute *attr,
 static ssize_t objs_store(struct kobject *kobj, struct kobj_attribute *attr,
 			  const char *buf, size_t count)
 {
+	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
+	pman_printk(pman);
 	return count;
 }
 static struct kobj_attribute objs_attribute =
