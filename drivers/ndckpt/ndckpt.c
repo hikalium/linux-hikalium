@@ -448,7 +448,7 @@ EXPORT_SYMBOL(ndckpt_notify_pmem);
 
 int ndckpt_enable_checkpointing(struct task_struct *task, int restore_obj_id)
 {
-	if (task->flags & PF_FORKNOEXEC == 0) {
+	if ((task->flags & PF_FORKNOEXEC) == 0) {
 		// ndckpt can be enabled only before exec after fork.
 		return -EINVAL;
 	}
@@ -458,6 +458,30 @@ int ndckpt_enable_checkpointing(struct task_struct *task, int restore_obj_id)
 	return 0;
 }
 EXPORT_SYMBOL(ndckpt_enable_checkpointing);
+
+void ndckpt_handle_execve(struct task_struct *task)
+{
+	struct mm_struct *mm;
+	struct vm_area_struct *vma;
+	printk("ndckpt: ndckpt_handle_execve: pid = %d\n", task->pid);
+	mm = task->mm;
+	vma = mm->mmap;
+	while (vma) {
+		printk("ndckpt: vm_area_struct@0x%016llX\n", (uint64_t)vma);
+		printk("ndckpt:   vm_start = 0x%016llX\n",
+		       (uint64_t)vma->vm_start);
+		printk("ndckpt:   vm_end   = 0x%016llX\n",
+		       (uint64_t)vma->vm_end);
+		printk("ndckpt:   vm_next   = 0x%016llX\n",
+		       (uint64_t)vma->vm_next);
+		printk("ndckpt:   vm_prev   = 0x%016llX\n",
+		       (uint64_t)vma->vm_prev);
+		printk("ndckpt:   vm_flags   = 0x%016llX\n",
+		       (uint64_t)vma->vm_flags);
+		vma = vma->vm_next;
+	}
+}
+EXPORT_SYMBOL(ndckpt_handle_execve);
 
 static int add_sysfs_kobj(const char *name, struct kobj_attribute *attr)
 {

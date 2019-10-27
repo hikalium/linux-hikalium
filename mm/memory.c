@@ -3767,6 +3767,15 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 {
 	pte_t entry;
 
+#ifdef CONFIG_NDCKPT
+  if(current->flags & PF_NDCKPT_ENABLED && (current->flags & PF_FORKNOEXEC) == 0) {
+    printk("handle_pte_fault with PF_NDCKPT_ENABLED\n");
+    printk("  address = 0x%016lX\n", vmf->address);
+    printk("  pgoff   = 0x%016lX\n", vmf->pgoff);
+    printk("  flags   = 0x%08X\n", vmf->flags);
+  }
+#endif
+
 	if (unlikely(pmd_none(*vmf->pmd))) {
 		/*
 		 * Leave __pte_alloc() until later: because vm_ops->fault may

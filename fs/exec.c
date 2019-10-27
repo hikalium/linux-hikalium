@@ -72,6 +72,10 @@
 
 #include <trace/events/sched.h>
 
+#ifdef CONFIG_NDCKPT
+void ndckpt_handle_execve(struct task_struct *task);
+#endif
+
 int suid_dumpable = 0;
 
 static LIST_HEAD(formats);
@@ -1838,6 +1842,11 @@ static int __do_execve_file(int fd, struct filename *filename,
 		putname(filename);
 	if (displaced)
 		put_files_struct(displaced);
+#ifdef CONFIG_NDCKPT
+  if(current->flags & PF_NDCKPT_ENABLED) {
+    ndckpt_handle_execve(current);
+  }
+#endif
 	return retval;
 
 out:
