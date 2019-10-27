@@ -1719,6 +1719,12 @@ static int __do_execve_file(int fd, struct filename *filename,
 	struct files_struct *displaced;
 	int retval;
 
+#ifdef CONFIG_NDCKPT
+  if(current->flags & PF_NDCKPT_ENABLED) {
+    printk("__do_execve_file with PF_NDCKPT_ENABLED (pid=%d)\n", current->pid);
+  }
+#endif
+
 	if (IS_ERR(filename))
 		return PTR_ERR(filename);
 

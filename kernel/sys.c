@@ -71,6 +71,10 @@
 #include <asm/io.h>
 #include <asm/unistd.h>
 
+#ifdef CONFIG_NDCKPT
+extern int ndckpt_enable_checkpointing(struct task_struct *task, int restore_obj_id);
+#endif
+
 #include "uid16.h"
 
 #ifndef SET_UNALIGN_CTL
@@ -2234,6 +2238,18 @@ static int prctl_get_tid_address(struct task_struct *me, int __user **tid_addr)
 }
 #endif
 
+#ifdef CONFIG_NDCKPT
+static int prctl_enable_ndckpt(struct task_struct *me, int restore_obj_id)
+{
+	return ndckpt_enable_checkpointing(me, restore_obj_id);
+}
+#else
+static int prctl_enable_ndckpt(struct task_struct *me, int restore_obj_id)
+{
+	return -EINVAL;
+}
+#endif
+
 static int propagate_has_child_subreaper(struct task_struct *p, void *data)
 {
 	/*
@@ -2485,6 +2501,11 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 		if (arg3 || arg4 || arg5)
 			return -EINVAL;
 		error = PAC_RESET_KEYS(me, arg2);
+		break;
+	case PR_ENABLE_NDCKPT:
+		if (arg3 || arg4 || arg5)
+			return -EINVAL;
+		error = prctl_enable_ndckpt(me, arg2);
 		break;
 	default:
 		error = -EINVAL;

@@ -229,4 +229,7 @@ struct prctl_mm_map {
 # define PR_PAC_APDBKEY			(1UL << 3)
 # define PR_PAC_APGAKEY			(1UL << 4)
 
+/* Process checkpointing on NVDIMM (NDCKPT) */
+#define PR_ENABLE_NDCKPT 57
+
 #endif /* _LINUX_PRCTL_H */

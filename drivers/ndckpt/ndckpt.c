@@ -387,37 +387,47 @@ static struct kobj_attribute alloc_attribute =
 	__ATTR(alloc, 0660, alloc_show, alloc_store);
 
 static ssize_t pid_show(struct kobject *kobj, struct kobj_attribute *attr,
-			  char *buf)
+			char *buf)
 {
 	return 0;
 }
 static ssize_t pid_store(struct kobject *kobj, struct kobj_attribute *attr,
-			   const char *buf, size_t count)
+			 const char *buf, size_t count)
 {
 	int pid;
-  struct pid *p;
-  struct task_struct *t;
+	struct pid *p;
+	struct task_struct *t;
+	struct mm_struct *mm;
+	struct vm_area_struct *vma;
 	sscanf(buf, "%d", &pid);
 	printk("ndckpt: pid_store pid=%d\n", pid);
-  p = find_get_pid(pid);
-  if(!p) {
-	  printk("ndckpt: pid not found\n");
-    return count; 
-  }
-  t = pid_task(p, PIDTYPE_PID);
-  if(!t) {
-	  printk("ndckpt: task_struct not found\n");
-    return count; 
-  }
+	p = find_get_pid(pid);
+	if (!p) {
+		printk("ndckpt: pid not found\n");
+		return count;
+	}
+	t = pid_task(p, PIDTYPE_PID);
+	if (!t) {
+		printk("ndckpt: task_struct not found\n");
+		return count;
+	}
 	printk("ndckpt: task_struct found. pid = %d\n", t->pid);
-  struct mm_struct *mm = t->mm;
-  struct vm_area_struct *vma = mm->mmap;
-	printk("ndckpt: vm_area_struct@0x%016llX\n", vma);
-	printk("ndckpt:   vm_start = 0x%016llX\n", vma->vm_start);
-	printk("ndckpt:   vm_end   = 0x%016llX\n", vma->vm_end);
-	printk("ndckpt:   vm_next   = 0x%016llX\n", vma->vm_next);
-	printk("ndckpt:   vm_prev   = 0x%016llX\n", vma->vm_prev);
-
+	mm = t->mm;
+	vma = mm->mmap;
+	while (vma) {
+		printk("ndckpt: vm_area_struct@0x%016llX\n", (uint64_t)vma);
+		printk("ndckpt:   vm_start = 0x%016llX\n",
+		       (uint64_t)vma->vm_start);
+		printk("ndckpt:   vm_end   = 0x%016llX\n",
+		       (uint64_t)vma->vm_end);
+		printk("ndckpt:   vm_next   = 0x%016llX\n",
+		       (uint64_t)vma->vm_next);
+		printk("ndckpt:   vm_prev   = 0x%016llX\n",
+		       (uint64_t)vma->vm_prev);
+		printk("ndckpt:   vm_flags   = 0x%016llX\n",
+		       (uint64_t)vma->vm_flags);
+		vma = vma->vm_next;
+	}
 	return count;
 }
 static struct kobj_attribute pid_attribute =
@@ -435,6 +445,19 @@ void ndckpt_notify_pmem(struct pmem_device *pmem)
 	}
 }
 EXPORT_SYMBOL(ndckpt_notify_pmem);
+
+int ndckpt_enable_checkpointing(struct task_struct *task, int restore_obj_id)
+{
+	if (task->flags & PF_FORKNOEXEC == 0) {
+		// ndckpt can be enabled only before exec after fork.
+		return -EINVAL;
+	}
+  task->flags |= PF_NDCKPT_ENABLED;
+	printk("ndckpt: checkpoint enabled on pid=%d\n", task->pid);
+	printk("ndckpt:   task flags = 0x%08X\n", task->flags);
+	return 0;
+}
+EXPORT_SYMBOL(ndckpt_enable_checkpointing);
 
 static int add_sysfs_kobj(const char *name, struct kobj_attribute *attr)
 {
