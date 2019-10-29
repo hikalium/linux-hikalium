@@ -3768,12 +3768,30 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	pte_t entry;
 
 #ifdef CONFIG_NDCKPT
-  if(current->flags & PF_NDCKPT_ENABLED && (current->flags & PF_FORKNOEXEC) == 0) {
-    printk("handle_pte_fault with PF_NDCKPT_ENABLED\n");
-    printk("  address = 0x%016lX\n", vmf->address);
-    printk("  pgoff   = 0x%016lX\n", vmf->pgoff);
-    printk("  flags   = 0x%08X\n", vmf->flags);
-  }
+	if (current->flags & PF_NDCKPT_ENABLED &&
+	    (current->flags & PF_FORKNOEXEC) == 0) {
+		if (vmf->vma && vmf->vma->vm_start <= current->mm->brk &&
+		    vmf->vma->vm_end >= current->mm->start_brk) {
+			printk("  ndckpt: pte fault (heap) @ 0x%016lX flags=0x%08X\n",
+			       vmf->address, vmf->flags);
+		} else if (current->mm->start_code <= vmf->address &&
+			   vmf->address < current->mm->end_code) {
+			printk("  ndckpt: pte fault (code) @ 0x%016lX flags=0x%08X\n",
+			       vmf->address, vmf->flags);
+		} else if (current->mm->start_data <= vmf->address &&
+			   vmf->address < current->mm->end_data) {
+			printk("  ndckpt: pte fault (data) @ 0x%016lX flags=0x%08X\n",
+			       vmf->address, vmf->flags);
+		} else if (current->mm->start_stack > vmf->address &&
+			   ((current->mm->start_stack - vmf->address) >> 12) <
+				   current->mm->stack_vm) {
+			printk("  ndckpt: pte fault (stack) @ 0x%016lX flags=0x%08X\n",
+			       vmf->address, vmf->flags);
+		} else {
+			printk("  ndckpt: pte fault (?) @ 0x%016lX flags=0x%08X\n",
+			       vmf->address, vmf->flags);
+		}
+	}
 #endif
 
 	if (unlikely(pmd_none(*vmf->pmd))) {

@@ -464,6 +464,14 @@ void ndckpt_handle_execve(struct task_struct *task)
 	struct mm_struct *mm;
 	struct vm_area_struct *vma;
 	printk("ndckpt: ndckpt_handle_execve: pid = %d\n", task->pid);
+	printk("ndckpt: start_code  = 0x%016lX\n", task->mm->start_code);
+	printk("ndckpt: end_code    = 0x%016lX\n", task->mm->end_code);
+	printk("ndckpt: start_data  = 0x%016lX\n", task->mm->start_data);
+	printk("ndckpt: end_data    = 0x%016lX\n", task->mm->end_data);
+	printk("ndckpt: start_brk  = 0x%016lX\n", task->mm->start_brk);
+	printk("ndckpt: brk    = 0x%016lX\n", task->mm->brk);
+	printk("ndckpt: start_stack = 0x%016lX\n", task->mm->start_stack);
+	printk("ndckpt: stack_vm    = %ld\n", task->mm->stack_vm);
 	mm = task->mm;
 	vma = mm->mmap;
 	while (vma) {
