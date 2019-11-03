@@ -2955,6 +2955,14 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 					false))
 		goto oom_free_page;
 
+#ifdef CONFIG_NDCKPT
+  if (current->flags & PF_NDCKPT_ENABLED &&
+      (current->flags & PF_FORKNOEXEC) == 0) {
+    printk("ndckpt: Page allocated: pfn=0x%016lX\n", page_to_pfn(page));
+  }
+
+#endif
+
 	/*
 	 * The memory barrier inside __SetPageUptodate makes sure that
 	 * preceeding stores to the page contents become visible before
@@ -3410,6 +3418,14 @@ static vm_fault_t do_fault_around(struct vm_fault *vmf)
 
 	vmf->vma->vm_ops->map_pages(vmf, start_pgoff, end_pgoff);
 
+#ifdef CONFIG_NDCKPT
+  if (current->flags & PF_NDCKPT_ENABLED &&
+      (current->flags & PF_FORKNOEXEC) == 0) {
+    printk("ndckpt: vm_ops->map_pages start_pgoff=0x%016lX end_pgoff=0x%016lX\n", start_pgoff, end_pgoff);
+  }
+
+#endif
+
 	/* Huge page is mapped? Page fault is solved */
 	if (pmd_trans_huge(*vmf->pmd)) {
 		ret = VM_FAULT_NOPAGE;
@@ -3768,18 +3784,37 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	pte_t entry;
 
 #ifdef CONFIG_NDCKPT
+  vm_fault_t fault_code;
+  unsigned int pte_level;
+  pte_t *ptep;
 	if (current->flags & PF_NDCKPT_ENABLED &&
 	    (current->flags & PF_FORKNOEXEC) == 0) {
 		if (vmf->vma && vmf->vma->vm_start <= current->mm->brk &&
 		    vmf->vma->vm_end >= current->mm->start_brk) {
 			printk("  ndckpt: pte fault (heap) @ 0x%016lX flags=0x%08X\n",
 			       vmf->address, vmf->flags);
-		} else if (current->mm->start_code <= vmf->address &&
-			   vmf->address < current->mm->end_code) {
-			printk("  ndckpt: pte fault (code) @ 0x%016lX flags=0x%08X\n",
-			       vmf->address, vmf->flags);
-		} else if (current->mm->start_data <= vmf->address &&
-			   vmf->address < current->mm->end_data) {
+      if (!vmf->pte) {
+        fault_code = vma_is_anonymous(vmf->vma) ?
+          do_anonymous_page(vmf) :
+          do_fault(vmf);
+        ptep = lookup_address(vmf->address, &pte_level);
+        printk("  ndckpt: pte org: 0x%016lX\n",
+            vmf->orig_pte);
+        if(ptep) {
+          printk("  ndckpt: pte updated to: 0x%016lX level=%d fault_code=0x%08X\n",
+              *ptep, pte_level, fault_code);
+        } else{
+          printk("  ndckpt: pte not found. level=%d fault_code=0x%08X\n",
+              pte_level, fault_code);
+        }
+        return fault_code;
+      }
+    } else if (current->mm->start_code <= vmf->address &&
+        vmf->address < current->mm->end_code) {
+      printk("  ndckpt: pte fault (code) @ 0x%016lX flags=0x%08X\n",
+          vmf->address, vmf->flags);
+    } else if (current->mm->start_data <= vmf->address &&
+        vmf->address < current->mm->end_data) {
 			printk("  ndckpt: pte fault (data) @ 0x%016lX flags=0x%08X\n",
 			       vmf->address, vmf->flags);
 		} else if (current->mm->start_stack > vmf->address &&
@@ -3790,7 +3825,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		} else {
 			printk("  ndckpt: pte fault (?) @ 0x%016lX flags=0x%08X\n",
 			       vmf->address, vmf->flags);
-		}
+    }
 	}
 #endif
 
