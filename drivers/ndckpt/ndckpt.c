@@ -452,12 +452,33 @@ int ndckpt_enable_checkpointing(struct task_struct *task, int restore_obj_id)
 		// ndckpt can be enabled only before exec after fork.
 		return -EINVAL;
 	}
-  task->flags |= PF_NDCKPT_ENABLED;
+	task->flags |= PF_NDCKPT_ENABLED;
 	printk("ndckpt: checkpoint enabled on pid=%d\n", task->pid);
 	printk("ndckpt:   task flags = 0x%08X\n", task->flags);
 	return 0;
 }
 EXPORT_SYMBOL(ndckpt_enable_checkpointing);
+
+uint64_t ndckpt_alloc_phys_page(void)
+{
+	return ndckpt_virt_to_phys(
+		pman_alloc_pages(first_pmem_device->virt_addr, 1));
+}
+EXPORT_SYMBOL(ndckpt_alloc_phys_page);
+
+uint64_t ndckpt_virt_to_phys(void *vaddr)
+{
+	return (uint64_t)vaddr - (uint64_t)first_pmem_device->virt_addr +
+	       first_pmem_device->phys_addr;
+}
+EXPORT_SYMBOL(ndckpt_virt_to_phys);
+
+void *ndckpt_phys_to_virt(uint64_t paddr)
+{
+	return (void *)(paddr + (uint64_t)first_pmem_device->virt_addr -
+			first_pmem_device->phys_addr);
+}
+EXPORT_SYMBOL(ndckpt_phys_to_virt);
 
 void ndckpt_handle_execve(struct task_struct *task)
 {

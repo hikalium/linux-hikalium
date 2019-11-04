@@ -79,6 +79,10 @@
 #include <asm/tlbflush.h>
 #include <asm/pgtable.h>
 
+#ifdef CONFIG_NDCKPT
+#include "../drivers/ndckpt/ndckpt.h"
+#endif
+
 #include "internal.h"
 
 #if defined(LAST_CPUPID_NOT_IN_PAGE_FLAGS) && !defined(CONFIG_COMPILE_TEST)
@@ -3779,56 +3783,109 @@ static vm_fault_t wp_huge_pud(struct vm_fault *vmf, pud_t orig_pud)
  * The mmap_sem may have been released depending on flags and our return value.
  * See filemap_fault() and __lock_page_or_retry().
  */
-static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
+static vm_fault_t handle_pte_fault_body(struct vm_fault *vmf)
 {
 	pte_t entry;
 
-#ifdef CONFIG_NDCKPT
-  vm_fault_t fault_code;
-  unsigned int pte_level;
-  pte_t *ptep;
-	if (current->flags & PF_NDCKPT_ENABLED &&
-	    (current->flags & PF_FORKNOEXEC) == 0) {
-		if (vmf->vma && vmf->vma->vm_start <= current->mm->brk &&
-		    vmf->vma->vm_end >= current->mm->start_brk) {
-			printk("  ndckpt: pte fault (heap) @ 0x%016lX flags=0x%08X\n",
-			       vmf->address, vmf->flags);
-      if (!vmf->pte) {
-        fault_code = vma_is_anonymous(vmf->vma) ?
-          do_anonymous_page(vmf) :
-          do_fault(vmf);
-        ptep = lookup_address(vmf->address, &pte_level);
-        printk("  ndckpt: pte org: 0x%016lX\n",
-            vmf->orig_pte);
-        if(ptep) {
-          printk("  ndckpt: pte updated to: 0x%016lX level=%d fault_code=0x%08X\n",
-              *ptep, pte_level, fault_code);
-        } else{
-          printk("  ndckpt: pte not found. level=%d fault_code=0x%08X\n",
-              pte_level, fault_code);
-        }
-        return fault_code;
-      }
-    } else if (current->mm->start_code <= vmf->address &&
-        vmf->address < current->mm->end_code) {
-      printk("  ndckpt: pte fault (code) @ 0x%016lX flags=0x%08X\n",
-          vmf->address, vmf->flags);
-    } else if (current->mm->start_data <= vmf->address &&
-        vmf->address < current->mm->end_data) {
-			printk("  ndckpt: pte fault (data) @ 0x%016lX flags=0x%08X\n",
-			       vmf->address, vmf->flags);
-		} else if (current->mm->start_stack > vmf->address &&
-			   ((current->mm->start_stack - vmf->address) >> 12) <
-				   current->mm->stack_vm) {
-			printk("  ndckpt: pte fault (stack) @ 0x%016lX flags=0x%08X\n",
-			       vmf->address, vmf->flags);
-		} else {
-			printk("  ndckpt: pte fault (?) @ 0x%016lX flags=0x%08X\n",
-			       vmf->address, vmf->flags);
-    }
+	if (!vmf->pte) {
+		if (vma_is_anonymous(vmf->vma))
+			return do_anonymous_page(vmf);
+		else
+			return do_fault(vmf);
 	}
+
+	if (!pte_present(vmf->orig_pte))
+		return do_swap_page(vmf);
+
+	if (pte_protnone(vmf->orig_pte) && vma_is_accessible(vmf->vma))
+		return do_numa_page(vmf);
+
+	vmf->ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);
+	spin_lock(vmf->ptl);
+	entry = vmf->orig_pte;
+	if (unlikely(!pte_same(*vmf->pte, entry)))
+		goto unlock;
+	if (vmf->flags & FAULT_FLAG_WRITE) {
+		if (!pte_write(entry))
+			return do_wp_page(vmf);
+		entry = pte_mkdirty(entry);
+	}
+	entry = pte_mkyoung(entry);
+	if (ptep_set_access_flags(vmf->vma, vmf->address, vmf->pte, entry,
+				  vmf->flags & FAULT_FLAG_WRITE)) {
+		update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
+	} else {
+		/*
+		 * This is needed only for protection faults but the arch code
+		 * is not yet telling us if this is a protection fault or not.
+		 * This still avoids useless tlb flushes for .text page faults
+		 * with threads.
+		 */
+		if (vmf->flags & FAULT_FLAG_WRITE)
+			flush_tlb_fix_spurious_fault(vmf->vma, vmf->address);
+	}
+unlock:
+	pte_unmap_unlock(vmf->pte, vmf->ptl);
+	return 0;
+}
+
+#ifdef CONFIG_NDCKPT
+static vm_fault_t handle_pte_fault_ndckpt(struct vm_fault *vmf)
+{
+	vm_fault_t fault_code;
+	pte_t pte;
+	uint64_t paddr;
+  if (vmf->vma && vmf->vma->vm_start <= current->mm->brk &&
+      vmf->vma->vm_end >= current->mm->start_brk) {
+    printk("ndckpt: pte fault (heap) NOT existed @ 0x%016lX flags=0x%08X\n",
+        vmf->address, vmf->flags);
+    if (!vmf->pte) {
+      BUG_ON(!vma_is_anonymous(vmf->vma));
+      fault_code = do_anonymous_page(vmf);
+      // vmf->pte will be set by do_anonymous_page()
+      BUG_ON(!vmf->pte);
+      paddr = ndckpt_alloc_phys_page();
+      printk("handle_pte_fault: paddr=0x%08llX\n",
+          paddr);
+      // https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L2965
+      pte = pfn_pte(PHYS_PFN(paddr), vmf->vma->vm_page_prot);
+      /* No need to invalidate - it was non-present before */
+      *vmf->pte = pte;
+      update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
+      return fault_code;
+    } else {
+      BUG_ON(!(vmf->vma->vm_flags & VM_WRITE));
+      printk("ndckpt: pte fault (heap) already existed @ 0x%016lX flags=0x%08X\n",
+          vmf->address, vmf->flags);
+      pte = pte_mkwrite(pte_mkdirty(*vmf->pte));
+      /* No need to invalidate - already invalidated by fault */
+      *vmf->pte = pte;
+      update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
+      return 0;
+    }
+  } else if (current->mm->start_code <= vmf->address &&
+      vmf->address < current->mm->end_code) {
+    printk("  ndckpt: pte fault (code) @ 0x%016lX flags=0x%08X\n",
+        vmf->address, vmf->flags);
+  } else if (current->mm->start_data <= vmf->address &&
+      vmf->address < current->mm->end_data) {
+    printk("  ndckpt: pte fault (data) @ 0x%016lX flags=0x%08X\n",
+        vmf->address, vmf->flags);
+  } else if (current->mm->start_stack > vmf->address &&
+      ((current->mm->start_stack - vmf->address) >> 12) <
+      current->mm->stack_vm) {
+    printk("  ndckpt: pte fault (stack) @ 0x%016lX flags=0x%08X\n",
+        vmf->address, vmf->flags);
+  } else {
+    printk("  ndckpt: pte fault (?) @ 0x%016lX flags=0x%08X\n",
+        vmf->address, vmf->flags);
+  }
+  return handle_pte_fault_body(vmf);
+}
 #endif
 
+static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
+{
 	if (unlikely(pmd_none(*vmf->pmd))) {
 		/*
 		 * Leave __pte_alloc() until later: because vm_ops->fault may
@@ -3864,47 +3921,13 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			vmf->pte = NULL;
 		}
 	}
-
-	if (!vmf->pte) {
-		if (vma_is_anonymous(vmf->vma))
-			return do_anonymous_page(vmf);
-		else
-			return do_fault(vmf);
-	}
-
-	if (!pte_present(vmf->orig_pte))
-		return do_swap_page(vmf);
-
-	if (pte_protnone(vmf->orig_pte) && vma_is_accessible(vmf->vma))
-		return do_numa_page(vmf);
-
-	vmf->ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);
-	spin_lock(vmf->ptl);
-	entry = vmf->orig_pte;
-	if (unlikely(!pte_same(*vmf->pte, entry)))
-		goto unlock;
-	if (vmf->flags & FAULT_FLAG_WRITE) {
-		if (!pte_write(entry))
-			return do_wp_page(vmf);
-		entry = pte_mkdirty(entry);
-	}
-	entry = pte_mkyoung(entry);
-	if (ptep_set_access_flags(vmf->vma, vmf->address, vmf->pte, entry,
-				vmf->flags & FAULT_FLAG_WRITE)) {
-		update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
-	} else {
-		/*
-		 * This is needed only for protection faults but the arch code
-		 * is not yet telling us if this is a protection fault or not.
-		 * This still avoids useless tlb flushes for .text page faults
-		 * with threads.
-		 */
-		if (vmf->flags & FAULT_FLAG_WRITE)
-			flush_tlb_fix_spurious_fault(vmf->vma, vmf->address);
-	}
-unlock:
-	pte_unmap_unlock(vmf->pte, vmf->ptl);
-	return 0;
+#ifdef CONFIG_NDCKPT
+  if (current->flags & PF_NDCKPT_ENABLED &&
+      (current->flags & PF_FORKNOEXEC) == 0) {
+    return handle_pte_fault_ndckpt(vmf);
+  }
+#endif
+  return handle_pte_fault_body(vmf);
 }
 
 /*
