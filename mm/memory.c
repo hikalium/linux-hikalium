@@ -1291,6 +1291,13 @@ static void unmap_single_vma(struct mmu_gather *tlb,
 	if (unlikely(vma->vm_flags & VM_PFNMAP))
 		untrack_pfn(vma, 0, 0);
 
+#ifdef CONFIG_NDCKPT
+  if(vma->vm_ckpt_flags & VM_CKPT_TARGET) {
+    printk("unmap_single_vma: ignore 0x%016lX - 0x%016lX\n", start, end);
+    return;
+  }
+#endif
+
 	if (start != end) {
 		if (unlikely(is_vm_hugetlb_page(vma))) {
 			/*

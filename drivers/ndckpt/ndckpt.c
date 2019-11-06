@@ -6,6 +6,8 @@
 #include <linux/fs.h>
 #include <linux/string.h>
 #include <linux/timekeeping.h>
+#include <linux/ptrace.h>
+#include <linux/sched/task_stack.h>
 
 #include "../nvdimm/pmem.h"
 #include "ndckpt.h"
@@ -507,10 +509,31 @@ void ndckpt_handle_execve(struct task_struct *task)
 		       (uint64_t)vma->vm_prev);
 		printk("ndckpt:   vm_flags   = 0x%016llX\n",
 		       (uint64_t)vma->vm_flags);
+    vma->vm_ckpt_flags = 0;
+  if (vma->vm_start <= mm->brk &&
+      vma->vm_end >= mm->start_brk) {
+		printk("ndckpt:   This is heap vma. Set VM_CKPT_TARGET.\n",
+		       (uint64_t)vma->vm_flags);
+    vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+  }
 		vma = vma->vm_next;
 	}
 }
 EXPORT_SYMBOL(ndckpt_handle_execve);
+
+int ndckpt_handle_checkpoint(void)
+{
+	// This function should be called under the pt_regs is fully saved on the stack.
+	struct pt_regs *regs = current_pt_regs();
+	if (!(current->flags & PF_NDCKPT_ENABLED))
+		return -EINVAL;
+	printk("ndckpt_handle_checkpoint:\m");
+  printk("  ip = 0x%016lX\n", regs->ip);
+  printk("  sp = 0x%016lX\n", regs->sp);
+  regs->ip -= 0x27;
+	return 0;
+}
+EXPORT_SYMBOL(ndckpt_handle_checkpoint);
 
 static int add_sysfs_kobj(const char *name, struct kobj_attribute *attr)
 {

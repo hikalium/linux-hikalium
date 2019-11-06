@@ -73,7 +73,7 @@
 #include <trace/events/sched.h>
 
 #ifdef CONFIG_NDCKPT
-void ndckpt_handle_execve(struct task_struct *task);
+#include "../drivers/ndckpt/ndckpt.h"
 #endif
 
 int suid_dumpable = 0;
@@ -1970,6 +1970,11 @@ SYSCALL_DEFINE3(execve,
 		const char __user *const __user *, argv,
 		const char __user *const __user *, envp)
 {
+#ifdef CONFIG_NDCKPT
+  if(!filename && !argv && !envp) {
+    return ndckpt_handle_checkpoint();
+  }
+#endif
 	return do_execve(getname(filename), argv, envp);
 }
 
