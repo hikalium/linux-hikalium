@@ -198,6 +198,7 @@ static void check_sync_rss_stat(struct task_struct *task)
 static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 			   unsigned long addr)
 {
+  // Free PT at phys addr: pmd_val(*pmd) & PTE_PFN_MASK
 	pgtable_t token = pmd_pgtable(*pmd);
 	pmd_clear(pmd);
 	pte_free_tlb(tlb, token, addr);
@@ -208,6 +209,7 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 				unsigned long addr, unsigned long end,
 				unsigned long floor, unsigned long ceiling)
 {
+  // Free PD at phys addr: pud_val(*pud) & PTE_PFN_MASK
 	pmd_t *pmd;
 	unsigned long next;
 	unsigned long start;
@@ -242,12 +244,19 @@ static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 				unsigned long addr, unsigned long end,
 				unsigned long floor, unsigned long ceiling)
 {
+  // Free PDPT at phys addr: p4d_val(*p4d) & PTE_PFN_MASK
 	pud_t *pud;
 	unsigned long next;
 	unsigned long start;
 
-	start = addr;
+#ifdef CONFIG_NDCKPT
+  bool is_on_nvdimm = ndckpt_is_p4d_points_nvdimm_page(*p4d);
+  pud = ndckpt_pud_offset(p4d, addr);
+#else
 	pud = pud_offset(p4d, addr);
+#endif
+	start = addr;
+
 	do {
 		next = pud_addr_end(addr, end);
 		if (pud_none_or_clear_bad(pud))
@@ -266,9 +275,20 @@ static inline void free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 	if (end - 1 > ceiling - 1)
 		return;
 
+#ifdef CONFIG_NDCKPT
+  pud = ndckpt_pud_offset(p4d, start);
+#else
 	pud = pud_offset(p4d, start);
+#endif
 	p4d_clear(p4d);
+#ifdef CONFIG_NDCKPT
+  // Avoid dereferencing invalid struct page * for nvdimm
+  if(!is_on_nvdimm){
+	  pud_free_tlb(tlb, pud, start);
+  }
+#else
 	pud_free_tlb(tlb, pud, start);
+#endif
 	mm_dec_nr_puds(tlb->mm);
 }
 
@@ -276,6 +296,7 @@ static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 				unsigned long addr, unsigned long end,
 				unsigned long floor, unsigned long ceiling)
 {
+  // Free PML4 at phys addr: pgd_val(*pgd) & PTE_PFN_MASK
 	p4d_t *p4d;
 	unsigned long next;
 	unsigned long start;
@@ -1210,7 +1231,11 @@ static inline unsigned long zap_pud_range(struct mmu_gather *tlb,
 	pud_t *pud;
 	unsigned long next;
 
+#ifdef CONFIG_NDCKPT
+  pud = ndckpt_pud_offset(p4d, addr);
+#else
 	pud = pud_offset(p4d, addr);
+#endif
 	do {
 		next = pud_addr_end(addr, end);
 		if (pud_trans_huge(*pud) || pud_devmap(*pud)) {
@@ -2971,7 +2996,6 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
       (current->flags & PF_FORKNOEXEC) == 0) {
     printk("ndckpt: Page allocated: pfn=0x%016lX\n", page_to_pfn(page));
   }
-
 #endif
 
 	/*
@@ -3434,7 +3458,6 @@ static vm_fault_t do_fault_around(struct vm_fault *vmf)
       (current->flags & PF_FORKNOEXEC) == 0) {
     printk("ndckpt: vm_ops->map_pages start_pgoff=0x%016lX end_pgoff=0x%016lX\n", start_pgoff, end_pgoff);
   }
-
 #endif
 
 	/* Huge page is mapped? Page fault is solved */
@@ -3964,7 +3987,11 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 	if (!p4d)
 		return VM_FAULT_OOM;
 
+#ifdef CONFIG_NDCKPT
+	vmf.pud = ndckpt_pud_alloc(mm, p4d, address);
+#else
 	vmf.pud = pud_alloc(mm, p4d, address);
+#endif
 	if (!vmf.pud)
 		return VM_FAULT_OOM;
 	if (pud_none(*vmf.pud) && __transparent_hugepage_enabled(vma)) {
