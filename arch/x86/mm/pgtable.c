@@ -21,6 +21,10 @@ EXPORT_SYMBOL(physical_mask);
 #define PGALLOC_USER_GFP 0
 #endif
 
+#ifdef CONFIG_NDCKPT
+#include "../../../drivers/ndckpt/ndckpt.h"
+#endif
+
 gfp_t __userpte_alloc_gfp = PGALLOC_GFP | PGALLOC_USER_GFP;
 
 pte_t *pte_alloc_one_kernel(struct mm_struct *mm)
@@ -109,7 +113,12 @@ static inline void pgd_list_add(pgd_t *pgd)
 static inline void pgd_list_del(pgd_t *pgd)
 {
 	struct page *page = virt_to_page(pgd);
-
+#ifdef CONFIG_NDCKPT
+  if(ndckpt_is_virt_addr_in_nvdimm(pgd)){
+    // Avoid referencing page on NVDIMM
+    return;
+  }
+#endif
 	list_del(&page->lru);
 }
 
@@ -427,6 +436,12 @@ static inline pgd_t *_pgd_alloc(void)
 
 static inline void _pgd_free(pgd_t *pgd)
 {
+#ifdef CONFIG_NDCKPT
+  if(ndckpt_is_virt_addr_in_nvdimm(pgd)){
+    // Avoid to free pgd on NVDIMM
+    return;
+  }
+#endif
 	free_pages((unsigned long)pgd, PGD_ALLOCATION_ORDER);
 }
 #endif /* CONFIG_X86_PAE */
