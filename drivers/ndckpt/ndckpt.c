@@ -237,7 +237,7 @@ static void ndckpt_print_pd(pmd_t *pmd)
 		e = pmd[i].pmd;
 		if ((e & _PAGE_PRESENT) == 0)
 			continue;
-		printk("ndckpt:   PD  [0x%03X] = 0x%016llX\n", i, e);
+		printk("ndckpt:     PD  [0x%03X] = 0x%016llX\n", i, e);
 	}
 }
 

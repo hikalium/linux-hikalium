@@ -214,8 +214,14 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 	unsigned long next;
 	unsigned long start;
 
-	start = addr;
+#ifdef CONFIG_NDCKPT
+  bool is_on_nvdimm = ndckpt_is_pud_points_nvdimm_page(*pud);
+	pmd = ndckpt_pmd_offset(pud, addr);
+#else
 	pmd = pmd_offset(pud, addr);
+#endif
+	start = addr;
+
 	do {
 		next = pmd_addr_end(addr, end);
 		if (pmd_none_or_clear_bad(pmd))
@@ -234,9 +240,20 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 	if (end - 1 > ceiling - 1)
 		return;
 
+#ifdef CONFIG_NDCKPT
+  pmd = ndckpt_pmd_offset(pud, start);
+#else
 	pmd = pmd_offset(pud, start);
+#endif
 	pud_clear(pud);
+#ifdef CONFIG_NDCKPT
+  if(!is_on_nvdimm) {
+    // avoid taking struct page for pmd
+	  pmd_free_tlb(tlb, pmd, start);
+  }
+#else
 	pmd_free_tlb(tlb, pmd, start);
+#endif
 	mm_dec_nr_pmds(tlb->mm);
 }
 
@@ -448,13 +465,24 @@ int __pte_alloc(struct mm_struct *mm, pmd_t *pmd)
 	 */
 	smp_wmb(); /* Could be smp_wmb__xxx(before|after)_spin_lock */
 
+#ifdef CONFIG_NDCKPT
+  // Avoid referencing NVDIMM page to get lock
+	ptl = ndckpt_is_enabled_on_current() ? NULL : pmd_lock(mm, pmd);
+#else
 	ptl = pmd_lock(mm, pmd);
+#endif
 	if (likely(pmd_none(*pmd))) {	/* Has another populated it ? */
 		mm_inc_nr_ptes(mm);
 		pmd_populate(mm, pmd, new);
 		new = NULL;
 	}
+#ifdef CONFIG_NDCKPT
+  if (ptl) {
+	  spin_unlock(ptl);
+  }
+#else
 	spin_unlock(ptl);
+#endif
 	if (new)
 		pte_free(mm, new);
 	return 0;
@@ -1196,7 +1224,11 @@ static inline unsigned long zap_pmd_range(struct mmu_gather *tlb,
 	pmd_t *pmd;
 	unsigned long next;
 
+#ifdef CONFIG_NDCKPT
+	pmd = ndckpt_pmd_offset(pud, addr);
+#else
 	pmd = pmd_offset(pud, addr);
+#endif
 	do {
 		next = pmd_addr_end(addr, end);
 		if (is_swap_pmd(*pmd) || pmd_trans_huge(*pmd) || pmd_devmap(*pmd)) {
@@ -3119,6 +3151,17 @@ static vm_fault_t pte_alloc_one_map(struct vm_fault *vmf)
 	if (!pmd_none(*vmf->pmd))
 		goto map_pte;
 	if (vmf->prealloc_pte) {
+#ifdef CONFIG_NDCKPT
+    // Set vmf->prealloc_pte to vmf->pmd.
+    // We can't get struct page for NVDIMM page, doing this without lock.
+    // TODO: support lock
+    if(ndckpt_is_enabled_on_current()) {
+      printk("vmf->prealloc_pte\n");
+    }
+		mm_inc_nr_ptes(vma->vm_mm);
+		pmd_populate(vma->vm_mm, vmf->pmd, vmf->prealloc_pte);
+		vmf->prealloc_pte = NULL;
+#else
 		vmf->ptl = pmd_lock(vma->vm_mm, vmf->pmd);
 		if (unlikely(!pmd_none(*vmf->pmd))) {
 			spin_unlock(vmf->ptl);
@@ -3129,6 +3172,7 @@ static vm_fault_t pte_alloc_one_map(struct vm_fault *vmf)
 		pmd_populate(vma->vm_mm, vmf->pmd, vmf->prealloc_pte);
 		spin_unlock(vmf->ptl);
 		vmf->prealloc_pte = NULL;
+#endif
 	} else if (unlikely(pte_alloc(vma->vm_mm, vmf->pmd))) {
 		return VM_FAULT_OOM;
 	}
@@ -3287,6 +3331,9 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 	}
 
 	if (!vmf->pte) {
+    if(ndckpt_is_enabled_on_current()){
+      printk("pte_alloc_one_map!\n");
+    }
 		ret = pte_alloc_one_map(vmf);
 		if (ret)
 			return ret;
@@ -4017,7 +4064,11 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 		}
 	}
 
+#ifdef CONFIG_NDCKPT
+	vmf.pmd = ndckpt_pmd_alloc(mm, vmf.pud, address);
+#else
 	vmf.pmd = pmd_alloc(mm, vmf.pud, address);
+#endif
 	if (!vmf.pmd)
 		return VM_FAULT_OOM;
 	if (pmd_none(*vmf.pmd) && __transparent_hugepage_enabled(vma)) {
