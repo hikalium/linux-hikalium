@@ -41,6 +41,14 @@ static inline unsigned long ndckpt_pgd_page_vaddr(pgd_t pgd)
 		return (unsigned long)__va(paddr);
 	return (unsigned long long)ndckpt_phys_to_virt(paddr);
 }
+static inline unsigned long ndckpt_pud_page_vaddr(pud_t pud)
+{
+	// https://elixir.bootlin.com/linux/v5.1.3/source/arch/x86/include/asm/pgtable.h#L934
+	uint64_t paddr = pud_val(pud) & PTE_PFN_MASK;
+	if (!ndckpt_is_phys_addr_in_nvdimm(paddr))
+		return (unsigned long)__va(paddr);
+	return (unsigned long long)ndckpt_phys_to_virt(paddr);
+}
 
 static inline unsigned long ndckpt_p4d_to_pdpt_paddr(p4d_t e)
 {

@@ -227,17 +227,34 @@ EXPORT_SYMBOL(ndckpt_is_virt_addr_in_nvdimm);
 
 */
 
+static void ndckpt_print_pd(pmd_t *pmd)
+{
+	int i;
+	uint64_t e;
+	printk("ndckpt:     PD   @ 0x%016llX %s\n", (uint64_t)pmd,
+	       ndckpt_is_virt_addr_in_nvdimm(pmd) ? "(on NVDIMM)" : "");
+	for (i = 0; i < PAGE_SIZE / sizeof(pmd_t); i++) {
+		e = pmd[i].pmd;
+		if ((e & _PAGE_PRESENT) == 0)
+			continue;
+		printk("ndckpt:   PD  [0x%03X] = 0x%016llX\n", i, e);
+	}
+}
+
 static void ndckpt_print_pdpt(pud_t *pud)
 {
 	int i;
 	uint64_t e;
 	printk("ndckpt:   PDPT @ 0x%016llX %s\n", (uint64_t)pud,
 	       ndckpt_is_virt_addr_in_nvdimm(pud) ? "(on NVDIMM)" : "");
+	if (!ndckpt_is_virt_addr_in_nvdimm(pud))
+		return;
 	for (i = 0; i < PAGE_SIZE / sizeof(pud_t); i++) {
 		e = pud[i].pud;
-		if (e & _PAGE_PRESENT) {
-			printk("ndckpt:   PDPT[0x%03X] = 0x%016llX\n", i, e);
-		}
+		if ((e & _PAGE_PRESENT) == 0)
+			continue;
+		printk("ndckpt:   PDPT[0x%03X] = 0x%016llX\n", i, e);
+		ndckpt_print_pd((pmd_t *)ndckpt_pud_page_vaddr(pud[i]));
 	}
 }
 
@@ -249,11 +266,10 @@ static void ndckpt_print_pml4(pgd_t *pgd)
 	       ndckpt_is_virt_addr_in_nvdimm(pgd) ? "(on NVDIMM)" : "");
 	for (i = 0; i < PAGE_SIZE / sizeof(pgd_t); i++) {
 		e = (uint64_t)pgd[i].pgd;
-		if (e & _PAGE_PRESENT) {
-			printk("ndckpt: PML4[0x%03X] = 0x%016llX\n", i, e);
-			ndckpt_print_pdpt(
-				(pud_t *)ndckpt_pgd_page_vaddr(pgd[i]));
-		}
+		if ((e & _PAGE_PRESENT) == 0)
+			continue;
+		printk("ndckpt: PML4[0x%03X] = 0x%016llX\n", i, e);
+		ndckpt_print_pdpt((pud_t *)ndckpt_pgd_page_vaddr(pgd[i]));
 	}
 }
 
