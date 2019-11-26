@@ -1,1 +1,1 @@
-obj-$(CONFIG_NDCKPT) +=ndckpt.o
+obj-$(CONFIG_NDCKPT) +=ndckpt.o sysfs.o
