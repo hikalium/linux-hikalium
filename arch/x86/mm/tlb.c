@@ -17,6 +17,10 @@
 
 #include "mm_internal.h"
 
+#ifdef CONFIG_NDCKPT
+#include "../drivers/ndckpt/ndckpt.h"
+#endif
+
 /*
  *	TLB flushing, formerly SMP-only
  *		c/o Linus Torvalds.
@@ -109,16 +113,49 @@ static void choose_new_asid(struct mm_struct *next, u64 next_tlb_gen,
 	*need_flush = true;
 }
 
+#ifdef CONFIG_NDCKPT
+static inline unsigned long ndckpt_build_cr3(pgd_t *pgd, u16 asid, bool need_flush)
+{
+  unsigned long cr3_val =
+    ndckpt_is_virt_addr_in_nvdimm(pgd) ?
+    ndckpt_virt_to_phys(pgd) : __sme_pa(pgd);
+  if(need_flush) {
+    if (static_cpu_has(X86_FEATURE_PCID)) {
+      cr3_val |= kern_pcid(asid);
+    } else {
+      VM_WARN_ON_ONCE(asid != 0);
+    }
+  } else {
+    VM_WARN_ON_ONCE(asid > MAX_ASID_AVAILABLE);
+    /*
+     * Use boot_cpu_has() instead of this_cpu_has() as this function
+     * might be called during early boot. This should work even after
+     * boot because all CPU's the have same capabilities:
+     */
+    VM_WARN_ON_ONCE(!boot_cpu_has(X86_FEATURE_PCID));
+    cr3_val |= kern_pcid(asid) | CR3_NOFLUSH;
+  }
+  return cr3_val;
+}
+#endif
+
 static void load_new_mm_cr3(pgd_t *pgdir, u16 new_asid, bool need_flush)
 {
 	unsigned long new_mm_cr3;
 
+#ifdef CONFIG_NDCKPT
+  if (need_flush) {
+		invalidate_user_asid(new_asid);
+  }
+  new_mm_cr3 = ndckpt_build_cr3(pgdir, new_asid, need_flush);
+#else
 	if (need_flush) {
 		invalidate_user_asid(new_asid);
 		new_mm_cr3 = build_cr3(pgdir, new_asid);
 	} else {
 		new_mm_cr3 = build_cr3_noflush(pgdir, new_asid);
 	}
+#endif
 
 	/*
 	 * Caution: many callers of this function expect

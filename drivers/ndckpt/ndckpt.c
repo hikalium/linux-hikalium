@@ -227,6 +227,21 @@ EXPORT_SYMBOL(ndckpt_is_virt_addr_in_nvdimm);
 
 */
 
+static void ndckpt_print_pt(pte_t *pte)
+{
+	int i;
+	uint64_t e;
+	printk("ndckpt:       PT   @ 0x%016llX %s\n", (uint64_t)pte,
+	       ndckpt_is_virt_addr_in_nvdimm(pte) ? "(on NVDIMM)" : "");
+	for (i = 0; i < PAGE_SIZE / sizeof(pte_t); i++) {
+		e = pte[i].pte;
+		if ((e & _PAGE_PRESENT) == 0)
+			continue;
+		printk("ndckpt:       PAGE[0x%03X] = 0x%016llX %s\n", i, e,
+        ndckpt_is_phys_addr_in_nvdimm(e & PTE_PFN_MASK) ? "(on NVDIMM)" : "");
+	}
+}
+
 static void ndckpt_print_pd(pmd_t *pmd)
 {
 	int i;
@@ -238,6 +253,7 @@ static void ndckpt_print_pd(pmd_t *pmd)
 		if ((e & _PAGE_PRESENT) == 0)
 			continue;
 		printk("ndckpt:     PD  [0x%03X] = 0x%016llX\n", i, e);
+    ndckpt_print_pt((pte_t *)ndckpt_pmd_page_vaddr(pmd[i]));
 	}
 }
 

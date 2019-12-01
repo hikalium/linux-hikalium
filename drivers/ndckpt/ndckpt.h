@@ -57,6 +57,14 @@ static inline unsigned long ndckpt_pud_page_vaddr(pud_t pud)
 		return (unsigned long)__va(paddr);
 	return (unsigned long long)ndckpt_phys_to_virt(paddr);
 }
+static inline unsigned long ndckpt_pmd_page_vaddr(pmd_t pmd)
+{
+	// https://elixir.bootlin.com/linux/v5.1.3/source/arch/x86/include/asm/pgtable.h#L934
+	uint64_t paddr = pmd_val(pmd) & PTE_PFN_MASK;
+	if (!ndckpt_is_phys_addr_in_nvdimm(paddr))
+		return (unsigned long)__va(paddr);
+	return (unsigned long long)ndckpt_phys_to_virt(paddr);
+}
 
 static inline unsigned long ndckpt_p4d_to_pdpt_paddr(p4d_t e)
 {
@@ -150,11 +158,27 @@ static inline int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud,
 static inline pmd_t *ndckpt_pmd_alloc(struct mm_struct *mm, pud_t *pud,
 				      unsigned long address)
 {
-  // Alloc page for pud if not existed, and return addr to entry for the address
+	// Alloc page for pud if not existed, and return addr to entry for the address
 	return (unlikely(pud_none(*pud)) &&
 		ndckpt___pmd_alloc(mm, pud, address)) ?
 		       NULL :
 		       ndckpt_pmd_offset(pud, address);
+}
+
+static inline void ndckpt_pmd_populate(struct mm_struct *mm, pmd_t *pmd,
+				       pte_t *pte)
+{
+	unsigned long pfn = (ndckpt_is_virt_addr_in_nvdimm(pte) ?
+				    ndckpt_virt_to_phys(pte) :
+				    __pa(pte)) >> PAGE_SHIFT;
+
+	paravirt_alloc_pte(mm, pfn);
+	set_pmd(pmd, __pmd(((pteval_t)pfn << PAGE_SHIFT) | _PAGE_TABLE));
+}
+
+static inline pte_t *ndckpt_pte_offset_kernel(pmd_t *pmd, unsigned long address)
+{
+    return (pte_t *)ndckpt_pmd_page_vaddr(*pmd) + pte_index(address);
 }
 
 #endif /* __NDCKPT_H__ */

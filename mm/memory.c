@@ -121,6 +121,22 @@ int randomize_va_space __read_mostly =
 					2;
 #endif
 
+#ifdef CONFIG_NDCKPT
+
+#define pte_offset_map_lock_wrapper(mm, pmd, address, ptlp)	\
+({							\
+	spinlock_t *__ptl = ndckpt_is_pmd_points_nvdimm_page(*pmd) ? \
+    NULL : pte_lockptr(mm, pmd);	\
+	pte_t *__pte = ndckpt_pte_offset_kernel(pmd, address);	\
+	*(ptlp) = __ptl;				\
+	if(__ptl) spin_lock(__ptl);				\
+	__pte;						\
+})
+
+#else
+#define pte_offset_map_lock_wrapper pte_offset_map_lock
+#endif
+
 static int __init disable_randmaps(char *s)
 {
 	randomize_va_space = 0;
@@ -199,9 +215,18 @@ static void free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
 			   unsigned long addr)
 {
   // Free PT at phys addr: pmd_val(*pmd) & PTE_PFN_MASK
+#ifdef CONFIG_NDCKPT
+	pgtable_t token = ndckpt_is_pmd_points_nvdimm_page(*pmd) ? NULL : pmd_pgtable(*pmd);
+#else
 	pgtable_t token = pmd_pgtable(*pmd);
+#endif
 	pmd_clear(pmd);
+#ifdef CONFIG_NDCKPT
+	if(token)
+    pte_free_tlb(tlb, token, addr);
+#else
 	pte_free_tlb(tlb, token, addr);
+#endif
 	mm_dec_nr_ptes(tlb->mm);
 }
 
@@ -473,8 +498,17 @@ int __pte_alloc(struct mm_struct *mm, pmd_t *pmd)
 #endif
 	if (likely(pmd_none(*pmd))) {	/* Has another populated it ? */
 		mm_inc_nr_ptes(mm);
+#ifdef CONFIG_NDCKPT
+    if(ndckpt_is_enabled_on_current()) {
+      ndckpt_pmd_populate(mm, pmd, (pte_t*)ndckpt_alloc_zeroed_page());
+    } else{
+      ndckpt_pmd_populate(mm, pmd, page_to_virt(new));
+      new = NULL;
+    }
+#else
 		pmd_populate(mm, pmd, new);
 		new = NULL;
+#endif
 	}
 #ifdef CONFIG_NDCKPT
   if (ptl) {
@@ -1102,7 +1136,7 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 	tlb_remove_check_page_size_change(tlb, PAGE_SIZE);
 again:
 	init_rss_vec(rss);
-	start_pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
+	start_pte = pte_offset_map_lock_wrapper(mm, pmd, addr, &ptl);
 	pte = start_pte;
 	flush_tlb_batched_pending(mm);
 	arch_enter_lazy_mmu_mode();
@@ -2354,7 +2388,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 	/*
 	 * Re-check the pte - we dropped the lock
 	 */
-	vmf->pte = pte_offset_map_lock(mm, vmf->pmd, vmf->address, &vmf->ptl);
+	vmf->pte = pte_offset_map_lock_wrapper(mm, vmf->pmd, vmf->address, &vmf->ptl);
 	if (likely(pte_same(*vmf->pte, vmf->orig_pte))) {
 		if (old_page) {
 			if (!PageAnon(old_page)) {
@@ -2468,11 +2502,11 @@ oom:
 vm_fault_t finish_mkwrite_fault(struct vm_fault *vmf)
 {
 	WARN_ON_ONCE(!(vmf->vma->vm_flags & VM_SHARED));
-	vmf->pte = pte_offset_map_lock(vmf->vma->vm_mm, vmf->pmd, vmf->address,
+	vmf->pte = pte_offset_map_lock_wrapper(vmf->vma->vm_mm, vmf->pmd, vmf->address,
 				       &vmf->ptl);
 	/*
 	 * We might have raced with another page fault while we released the
-	 * pte_offset_map_lock.
+	 * pte_offset_map_lock_wrapper.
 	 */
 	if (!pte_same(*vmf->pte, vmf->orig_pte)) {
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
@@ -2590,7 +2624,7 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 			get_page(vmf->page);
 			pte_unmap_unlock(vmf->pte, vmf->ptl);
 			lock_page(vmf->page);
-			vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd,
+			vmf->pte = pte_offset_map_lock_wrapper(vma->vm_mm, vmf->pmd,
 					vmf->address, &vmf->ptl);
 			if (!pte_same(*vmf->pte, vmf->orig_pte)) {
 				unlock_page(vmf->page);
@@ -2810,7 +2844,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 			 * Back out if somebody else faulted in this pte
 			 * while we released the pte lock.
 			 */
-			vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd,
+			vmf->pte = pte_offset_map_lock_wrapper(vma->vm_mm, vmf->pmd,
 					vmf->address, &vmf->ptl);
 			if (likely(pte_same(*vmf->pte, vmf->orig_pte)))
 				ret = VM_FAULT_OOM;
@@ -2866,7 +2900,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	/*
 	 * Back out if somebody else already faulted in this pte.
 	 */
-	vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd, vmf->address,
+	vmf->pte = pte_offset_map_lock_wrapper(vma->vm_mm, vmf->pmd, vmf->address,
 			&vmf->ptl);
 	if (unlikely(!pte_same(*vmf->pte, vmf->orig_pte)))
 		goto out_nomap;
@@ -2963,6 +2997,7 @@ out_release:
  * but allow concurrent faults), and pte mapped but not yet locked.
  * We return with mmap_sem still held, but pte unmapped and unlocked.
  */
+
 static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
@@ -2997,7 +3032,7 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 			!mm_forbids_zeropage(vma->vm_mm)) {
 		entry = pte_mkspecial(pfn_pte(my_zero_pfn(vmf->address),
 						vma->vm_page_prot));
-		vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd,
+		vmf->pte = pte_offset_map_lock_wrapper(vma->vm_mm, vmf->pmd,
 				vmf->address, &vmf->ptl);
 		if (!pte_none(*vmf->pte))
 			goto unlock;
@@ -3041,7 +3076,8 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	if (vma->vm_flags & VM_WRITE)
 		entry = pte_mkwrite(pte_mkdirty(entry));
 
-	vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd, vmf->address,
+  // if NDCKPT is enabled, vmf->ptl may be NULL.
+	vmf->pte = pte_offset_map_lock_wrapper(vma->vm_mm, vmf->pmd, vmf->address,
 			&vmf->ptl);
 	if (!pte_none(*vmf->pte))
 		goto release;
@@ -3068,7 +3104,12 @@ setpte:
 	/* No need to invalidate - it was non-present before */
 	update_mmu_cache(vma, vmf->address, vmf->pte);
 unlock:
+#ifdef CONFIG_NDCKPT
+  // if NDCKPT is enabled, vmf->ptl may be NULL.
+	if(vmf->ptl) pte_unmap_unlock(vmf->pte, vmf->ptl);
+#else
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
+#endif
 	return ret;
 release:
 	mem_cgroup_cancel_charge(page, memcg, false);
@@ -3159,7 +3200,7 @@ static vm_fault_t pte_alloc_one_map(struct vm_fault *vmf)
       printk("vmf->prealloc_pte\n");
     }
 		mm_inc_nr_ptes(vma->vm_mm);
-		pmd_populate(vma->vm_mm, vmf->pmd, vmf->prealloc_pte);
+		ndckpt_pmd_populate(vma->vm_mm, vmf->pmd, page_to_virt(vmf->prealloc_pte));
 		vmf->prealloc_pte = NULL;
 #else
 		vmf->ptl = pmd_lock(vma->vm_mm, vmf->pmd);
@@ -3200,7 +3241,7 @@ map_pte:
 	 * pte_none() under vmf->ptl protection when we return to
 	 * alloc_set_pte().
 	 */
-	vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd, vmf->address,
+	vmf->pte = pte_offset_map_lock_wrapper(vma->vm_mm, vmf->pmd, vmf->address,
 			&vmf->ptl);
 	return 0;
 }
@@ -3654,7 +3695,7 @@ static vm_fault_t do_fault(struct vm_fault *vmf)
 		if (unlikely(!pmd_present(*vmf->pmd)))
 			ret = VM_FAULT_SIGBUS;
 		else {
-			vmf->pte = pte_offset_map_lock(vmf->vma->vm_mm,
+			vmf->pte = pte_offset_map_lock_wrapper(vmf->vma->vm_mm,
 						       vmf->pmd,
 						       vmf->address,
 						       &vmf->ptl);
@@ -3981,7 +4022,11 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		 * mmap_sem read mode and khugepaged takes it in write mode.
 		 * So now it's safe to run pte_offset_map().
 		 */
+#ifdef CONFIG_NDCKPT
+		vmf->pte = ndckpt_pte_offset_kernel(vmf->pmd, vmf->address);
+#else
 		vmf->pte = pte_offset_map(vmf->pmd, vmf->address);
+#endif
 		vmf->orig_pte = *vmf->pte;
 
 		/*
@@ -4296,7 +4341,7 @@ static int __follow_pte_pmd(struct mm_struct *mm, unsigned long address,
 				     (address & PAGE_MASK) + PAGE_SIZE);
 		mmu_notifier_invalidate_range_start(range);
 	}
-	ptep = pte_offset_map_lock(mm, pmd, address, ptlp);
+	ptep = pte_offset_map_lock_wrapper(mm, pmd, address, ptlp);
 	if (!pte_present(*ptep))
 		goto unlock;
 	*ptepp = ptep;
