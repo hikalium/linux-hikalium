@@ -24,7 +24,7 @@ static void clear_cache_disable_bit(void)
 	printk("ndckpt: cache enable\n");
 }
 
-void TestMem(int *array)
+static void TestMem(int *array)
 {
 	uint64_t nextstep, i, index;
 	uint64_t csize, stride;
