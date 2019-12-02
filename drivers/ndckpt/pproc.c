@@ -23,3 +23,14 @@ void pproc_set_pgd(struct PersistentProcessInfo *pproc, int ctx_idx, pgd_t *pgd)
 	ndckpt_clwb(&pproc->ctx[ctx_idx].pgd);
 	ndckpt_sfence();
 }
+
+void pproc_printk(struct PersistentProcessInfo *pproc)
+{
+	if (!pproc_is_valid(pproc)) {
+		printk("invalid last_proc_info\n");
+		return;
+	}
+	printk("PersistentProcessInfo at pobj #%lld:\n",
+	       pobj_get_header(pproc)->id);
+	ndckpt_print_pml4(pproc->ctx[0].pgd);
+}

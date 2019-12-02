@@ -93,10 +93,5 @@ void pman_print_last_proc_info(struct PersistentMemoryManager *pman)
 		return;
 	}
 	printk("pman is valid\n");
-	if (!pproc_is_valid(pman->last_proc_info)) {
-		printk("invalid last_proc_info\n");
-		return;
-	}
-	printk("last_proc_info at pobj #%lld:\n",
-	       pobj_get_header(pman->last_proc_info)->id);
+	pproc_printk(pman->last_proc_info);
 }

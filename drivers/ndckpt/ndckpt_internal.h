@@ -73,6 +73,8 @@ struct PersistentMemoryManager {
 extern struct kobject *kobj_ndckpt;
 extern struct pmem_device *first_pmem_device;
 
+void ndckpt_print_pml4(pgd_t *pgd);
+
 // @pman.c
 bool pman_is_valid(struct PersistentMemoryManager *pman);
 void pman_update_head(struct PersistentMemoryManager *pman,
@@ -98,6 +100,7 @@ bool pproc_is_valid(struct PersistentProcessInfo *pproc);
 struct PersistentProcessInfo *pproc_alloc(void);
 void pproc_set_pgd(struct PersistentProcessInfo *pproc, int ctx_idx,
 		   pgd_t *pgd);
+void pproc_printk(struct PersistentProcessInfo *pproc);
 
 // @sysfs.c
 int sysfs_interface_init(void);

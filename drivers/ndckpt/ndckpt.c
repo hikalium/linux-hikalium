@@ -88,20 +88,30 @@ EXPORT_SYMBOL(ndckpt_is_virt_addr_in_nvdimm);
 
 */
 
+static inline const char *get_str_dram_or_nvdimm(void *p)
+{
+	return ndckpt_is_virt_addr_in_nvdimm(p) ? "NVDIMM" : ">DRAM<";
+}
+
+static inline const char *get_str_dram_or_nvdimm_phys(uint64_t p)
+{
+	return ndckpt_is_phys_addr_in_nvdimm(p) ? "NVDIMM" : ">DRAM<";
+}
+
 static void ndckpt_print_pt(pte_t *pte)
 {
 	int i;
 	uint64_t e;
-	printk("ndckpt:       PT   @ 0x%016llX %s\n", (uint64_t)pte,
-	       ndckpt_is_virt_addr_in_nvdimm(pte) ? "(on NVDIMM)" : "");
+	printk("ndckpt:       PT   @ 0x%016llX on %s\n", (uint64_t)pte,
+	       get_str_dram_or_nvdimm(pte));
+	if (!ndckpt_is_virt_addr_in_nvdimm(pte))
+		return;
 	for (i = 0; i < PAGE_SIZE / sizeof(pte_t); i++) {
 		e = pte[i].pte;
 		if ((e & _PAGE_PRESENT) == 0)
 			continue;
-		printk("ndckpt:       PAGE[0x%03X] = 0x%016llX %s\n", i, e,
-		       ndckpt_is_phys_addr_in_nvdimm(e & PTE_PFN_MASK) ?
-			       "(on NVDIMM)" :
-			       "");
+		printk("ndckpt:       PAGE[0x%03X] = 0x%016llX on %s\n", i, e,
+		       get_str_dram_or_nvdimm_phys(e & PTE_PFN_MASK));
 	}
 }
 
@@ -109,8 +119,10 @@ static void ndckpt_print_pd(pmd_t *pmd)
 {
 	int i;
 	uint64_t e;
-	printk("ndckpt:     PD   @ 0x%016llX %s\n", (uint64_t)pmd,
-	       ndckpt_is_virt_addr_in_nvdimm(pmd) ? "(on NVDIMM)" : "");
+	printk("ndckpt:     PD   @ 0x%016llX on %s\n", (uint64_t)pmd,
+	       get_str_dram_or_nvdimm(pmd));
+	if (!ndckpt_is_virt_addr_in_nvdimm(pmd))
+		return;
 	for (i = 0; i < PAGE_SIZE / sizeof(pmd_t); i++) {
 		e = pmd[i].pmd;
 		if ((e & _PAGE_PRESENT) == 0)
@@ -124,8 +136,8 @@ static void ndckpt_print_pdpt(pud_t *pud)
 {
 	int i;
 	uint64_t e;
-	printk("ndckpt:   PDPT @ 0x%016llX %s\n", (uint64_t)pud,
-	       ndckpt_is_virt_addr_in_nvdimm(pud) ? "(on NVDIMM)" : "");
+	printk("ndckpt:   PDPT @ 0x%016llX on %s\n", (uint64_t)pud,
+	       get_str_dram_or_nvdimm(pud));
 	if (!ndckpt_is_virt_addr_in_nvdimm(pud))
 		return;
 	for (i = 0; i < PAGE_SIZE / sizeof(pud_t); i++) {
@@ -137,12 +149,14 @@ static void ndckpt_print_pdpt(pud_t *pud)
 	}
 }
 
-static void ndckpt_print_pml4(pgd_t *pgd)
+void ndckpt_print_pml4(pgd_t *pgd)
 {
 	int i;
 	uint64_t e;
-	printk("ndckpt: PML4 @ 0x%016llX %s\n", (uint64_t)pgd,
-	       ndckpt_is_virt_addr_in_nvdimm(pgd) ? "(on NVDIMM)" : "");
+	printk("ndckpt: PML4 @ 0x%016llX on %s\n", (uint64_t)pgd,
+	       get_str_dram_or_nvdimm(pgd));
+	if (!ndckpt_is_virt_addr_in_nvdimm(pgd))
+		return;
 	for (i = 0; i < PAGE_SIZE / sizeof(pgd_t); i++) {
 		e = (uint64_t)pgd[i].pgd;
 		if ((e & _PAGE_PRESENT) == 0)
