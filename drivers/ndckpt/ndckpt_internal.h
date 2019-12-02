@@ -77,12 +77,6 @@ bool pproc_is_valid(struct PersistentProcessInfo *pproc);
 struct PersistentProcessInfo *pproc_alloc(void);
 void pproc_set_pgd(struct PersistentProcessInfo *pproc, int ctx_idx,
 		   pgd_t *pgd);
-bool pobj_is_valid(struct PersistentObjectHeader *pobj);
-void pobj_init(struct PersistentObjectHeader *pobj, uint64_t id,
-	       uint64_t num_of_pages, struct PersistentObjectHeader *next);
-void *pobj_get_base(struct PersistentObjectHeader *pobj);
-struct PersistentObjectHeader *pobj_get_header(void *addr);
-void pobj_printk(struct PersistentObjectHeader *pobj);
 
 // @pman.c
 bool pman_is_valid(struct PersistentMemoryManager *pman);
@@ -95,6 +89,14 @@ void *pman_alloc_pages(struct PersistentMemoryManager *pman,
 		       uint64_t num_of_pages_requested);
 void pman_printk(struct PersistentMemoryManager *pman);
 void pman_print_last_proc_info(struct PersistentMemoryManager *pman);
+
+// @pobj.c
+bool pobj_is_valid(struct PersistentObjectHeader *pobj);
+void pobj_init(struct PersistentObjectHeader *pobj, uint64_t id,
+	       uint64_t num_of_pages, struct PersistentObjectHeader *next);
+void *pobj_get_base(struct PersistentObjectHeader *pobj);
+struct PersistentObjectHeader *pobj_get_header(void *addr);
+void pobj_printk(struct PersistentObjectHeader *pobj);
 
 // @sysfs.c
 int sysfs_interface_init(void);
