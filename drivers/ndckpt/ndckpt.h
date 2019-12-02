@@ -168,9 +168,10 @@ static inline pmd_t *ndckpt_pmd_alloc(struct mm_struct *mm, pud_t *pud,
 static inline void ndckpt_pmd_populate(struct mm_struct *mm, pmd_t *pmd,
 				       pte_t *pte)
 {
-	unsigned long pfn = (ndckpt_is_virt_addr_in_nvdimm(pte) ?
-				    ndckpt_virt_to_phys(pte) :
-				    __pa(pte)) >> PAGE_SHIFT;
+	unsigned long pfn =
+		(ndckpt_is_virt_addr_in_nvdimm(pte) ? ndckpt_virt_to_phys(pte) :
+						      __pa(pte)) >>
+		PAGE_SHIFT;
 
 	paravirt_alloc_pte(mm, pfn);
 	set_pmd(pmd, __pmd(((pteval_t)pfn << PAGE_SHIFT) | _PAGE_TABLE));
@@ -178,7 +179,7 @@ static inline void ndckpt_pmd_populate(struct mm_struct *mm, pmd_t *pmd,
 
 static inline pte_t *ndckpt_pte_offset_kernel(pmd_t *pmd, unsigned long address)
 {
-    return (pte_t *)ndckpt_pmd_page_vaddr(*pmd) + pte_index(address);
+	return (pte_t *)ndckpt_pmd_page_vaddr(*pmd) + pte_index(address);
 }
 
 #endif /* __NDCKPT_H__ */

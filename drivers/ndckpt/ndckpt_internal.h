@@ -18,10 +18,20 @@ static const uint64_t kPageSizeExponent = 12;
 
 #define POBJ_SIGNATURE 0x4F50534F6D75696CULL
 struct PersistentObjectHeader {
+	// This struct is placed at the end of the page,
+	// just before the allocated pages.
 	volatile uint64_t signature;
 	volatile uint64_t id;
 	volatile uint64_t num_of_pages;
 	struct PersistentObjectHeader *volatile next;
+};
+
+#define PPROC_SIGNATURE 0x5050534f6d75696cULL
+struct PersistentProcessInfo {
+	struct PersistentExecutionContext {
+		pgd_t *volatile pgd;
+	} ctx[2];
+	volatile uint64_t signature;
 };
 
 #define PMAN_SIGNATURE 0x4D50534F6D75696CULL
@@ -29,7 +39,9 @@ struct PersistentMemoryManager {
 	volatile uint64_t page_idx; // in virtual addr
 	volatile uint64_t num_of_pages;
 	struct PersistentObjectHeader *volatile head;
+	struct PersistentProcessInfo *volatile last_proc_info;
 	struct PersistentObjectHeader sentinel;
+	// 2nd cache line begins here
 	volatile uint64_t signature;
 };
 
@@ -43,3 +55,4 @@ void pman_printk(struct PersistentMemoryManager *pman);
 void *pman_alloc_pages(struct PersistentMemoryManager *pman,
 		       uint64_t num_of_pages_requested);
 void pman_init(struct pmem_device *pmem);
+void pman_print_last_proc_info(struct PersistentMemoryManager *pman);

@@ -28,6 +28,38 @@ static inline void ndckpt_sfence(void)
 	asm volatile("sfence");
 }
 
+//
+// struct PersistentProcessInfo
+//
+
+bool pproc_is_valid(struct PersistentProcessInfo *pproc)
+{
+	return pproc && pproc->signature == PPROC_SIGNATURE;
+}
+
+struct PersistentProcessInfo *pproc_alloc(void)
+{
+	struct PersistentProcessInfo *pproc = ndckpt_alloc_zeroed_page();
+	pproc->ctx[0].pgd = NULL;
+	pproc->ctx[1].pgd = NULL;
+	pproc->signature = PPROC_SIGNATURE;
+	ndckpt_clwb(&pproc->signature);
+	ndckpt_sfence();
+	return pproc;
+}
+
+void pproc_set_pgd(struct PersistentProcessInfo *pproc, int ctx_idx, pgd_t *pgd)
+{
+	BUG_ON(ctx_idx < 0 || 2 <= ctx_idx);
+	pproc->ctx[ctx_idx].pgd = pgd;
+	ndckpt_clwb(&pproc->ctx[ctx_idx].pgd);
+	ndckpt_sfence();
+}
+
+//
+// struct PersistentObjectHeader
+//
+
 bool pobj_is_valid(struct PersistentObjectHeader *pobj)
 {
 	return pobj && pobj->signature == POBJ_SIGNATURE;
@@ -54,7 +86,14 @@ void pobj_init(struct PersistentObjectHeader *pobj, uint64_t id,
 
 void *pobj_get_base(struct PersistentObjectHeader *pobj)
 {
-	return (uint8_t *)pobj + sizeof(*pobj);
+	return (uint8_t *)pobj + sizeof(struct PersistentObjectHeader);
+}
+
+struct PersistentObjectHeader *pobj_get_header(void *addr)
+{
+	return (struct PersistentObjectHeader
+			*)((uint8_t *)addr -
+			   sizeof(struct PersistentObjectHeader));
 }
 
 void pobj_printk(struct PersistentObjectHeader *pobj)
@@ -64,6 +103,10 @@ void pobj_printk(struct PersistentObjectHeader *pobj)
 	printk("  base(virtual) 0x%016llX\n", (uint64_t)pobj_get_base(pobj));
 	printk("  num_of_pages  %16lld\n", pobj->num_of_pages);
 }
+
+//
+// struct PersistentMemoryManager
+//
 
 bool pman_is_valid(struct PersistentMemoryManager *pman)
 {
@@ -78,6 +121,14 @@ void pman_update_head(struct PersistentMemoryManager *pman,
 	ndckpt_sfence();
 }
 
+void pman_set_last_proc_info(struct PersistentMemoryManager *pman,
+			     struct PersistentProcessInfo *pproc)
+{
+	pman->last_proc_info = pproc;
+	ndckpt_clwb(&pman->last_proc_info);
+	ndckpt_sfence();
+}
+
 void pman_init(struct pmem_device *pmem)
 {
 	struct PersistentMemoryManager *pman = pmem->virt_addr;
@@ -89,6 +140,7 @@ void pman_init(struct pmem_device *pmem)
 	pman->page_idx = (uint64_t)pmem->virt_addr >> kPageSizeExponent;
 	pman->num_of_pages = pmem->size >> kPageSizeExponent;
 	pman->head = NULL;
+	pman->last_proc_info = NULL;
 	ndckpt_clwb_range(pman, sizeof(*pman));
 	ndckpt_sfence();
 
@@ -140,6 +192,21 @@ void pman_printk(struct PersistentMemoryManager *pman)
 	for (pobj = pman->head; pobj; pobj = pobj->next) {
 		pobj_printk(pobj);
 	}
+}
+
+void pman_print_last_proc_info(struct PersistentMemoryManager *pman)
+{
+	if (!pman_is_valid(pman)) {
+		printk("invalid pman\n");
+		return;
+	}
+	printk("pman is valid\n");
+	if (!pproc_is_valid(pman->last_proc_info)) {
+		printk("invalid last_proc_info\n");
+		return;
+	}
+	printk("last_proc_info at pobj #%lld:\n",
+	       pobj_get_header(pman->last_proc_info)->id);
 }
 
 void ndckpt_notify_pmem(struct pmem_device *pmem)
@@ -238,7 +305,9 @@ static void ndckpt_print_pt(pte_t *pte)
 		if ((e & _PAGE_PRESENT) == 0)
 			continue;
 		printk("ndckpt:       PAGE[0x%03X] = 0x%016llX %s\n", i, e,
-        ndckpt_is_phys_addr_in_nvdimm(e & PTE_PFN_MASK) ? "(on NVDIMM)" : "");
+		       ndckpt_is_phys_addr_in_nvdimm(e & PTE_PFN_MASK) ?
+			       "(on NVDIMM)" :
+			       "");
 	}
 }
 
@@ -253,7 +322,7 @@ static void ndckpt_print_pd(pmd_t *pmd)
 		if ((e & _PAGE_PRESENT) == 0)
 			continue;
 		printk("ndckpt:     PD  [0x%03X] = 0x%016llX\n", i, e);
-    ndckpt_print_pt((pte_t *)ndckpt_pmd_page_vaddr(pmd[i]));
+		ndckpt_print_pt((pte_t *)ndckpt_pmd_page_vaddr(pmd[i]));
 	}
 }
 
@@ -314,6 +383,8 @@ void ndckpt_handle_execve(struct task_struct *task)
 {
 	struct mm_struct *mm;
 	struct vm_area_struct *vma;
+	struct PersistentProcessInfo *pproc;
+	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
 	mm = task->mm;
 	vma = mm->mmap;
 	printk("ndckpt: ndckpt_handle_execve: pid = %d\n", task->pid);
@@ -348,27 +419,39 @@ void ndckpt_handle_execve(struct task_struct *task)
 		}
 		vma = vma->vm_next;
 	}
+	pproc = pproc_alloc();
+	pproc_set_pgd(pproc, 0, mm->pgd);
+	pman_set_last_proc_info(pman, pproc);
+	printk("pproc: pobj #%lld\n",
+	       pobj_get_header(pman->last_proc_info)->id);
 }
 EXPORT_SYMBOL(ndckpt_handle_execve);
 
 int ndckpt_handle_checkpoint(void)
 {
 	// This function should be called under the pt_regs is fully saved on the stack.
-	struct pt_regs *regs = current_pt_regs();
+	//struct pt_regs *regs = current_pt_regs();
 	if (!(current->flags & PF_NDCKPT_ENABLED))
 		return -EINVAL;
+	/*
 	printk("ndckpt_handle_checkpoint:\n");
 	printk("  ip  = 0x%016lX\n", regs->ip);
 	printk("  sp  = 0x%016lX\n", regs->sp);
 	printk("  cr3 = 0x%016lX\n", __read_cr3());
 	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
 	regs->ip -= 0x27;
+  */
 	return 0;
 }
 EXPORT_SYMBOL(ndckpt_handle_checkpoint);
 
 static int __init ndckpt_module_init(void)
 {
+	BUILD_BUG_ON((sizeof(struct PersistentObjectHeader) > kCacheLineSize));
+	BUILD_BUG_ON((sizeof(struct PersistentProcessInfo) > kCacheLineSize));
+	BUILD_BUG_ON(
+		(sizeof(struct PersistentMemoryManager) > 2 * kCacheLineSize));
+
 	printk("ndckpt: module init\n");
 	kobj_ndckpt = kobject_create_and_add("ndckpt", kernel_kobj);
 	if (!kobj_ndckpt) {

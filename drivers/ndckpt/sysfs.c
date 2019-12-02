@@ -262,6 +262,21 @@ static ssize_t pid_store(struct kobject *kobj, struct kobj_attribute *attr,
 static struct kobj_attribute pid_attribute =
 	__ATTR(pid, 0660, pid_show, pid_store);
 
+static ssize_t info_show(struct kobject *kobj, struct kobj_attribute *attr,
+			 char *buf)
+{
+	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
+	pman_print_last_proc_info(pman);
+	return 0;
+}
+static ssize_t info_store(struct kobject *kobj, struct kobj_attribute *attr,
+			  const char *buf, size_t count)
+{
+	return count;
+}
+static struct kobj_attribute info_attribute =
+	__ATTR(info, 0660, info_show, info_store);
+
 static int add_sysfs_kobj(const char *name, struct kobj_attribute *attr)
 {
 	int error = 0;
@@ -287,6 +302,7 @@ int sysfs_interface_init(void)
 		return error;
 	if ((error = add_sysfs_kobj("pid", &pid_attribute)))
 		return error;
+	if ((error = add_sysfs_kobj("info", &info_attribute)))
+		return error;
 	return 0;
 }
-
