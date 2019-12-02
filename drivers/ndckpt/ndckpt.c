@@ -166,6 +166,99 @@ void ndckpt_print_pml4(pgd_t *pgd)
 	}
 }
 
+#define PADDR_TO_IDX_IN_PML4(paddr) ((paddr >> (12 + 9 * 3)) & 0x1FF)
+#define PADDR_TO_IDX_IN_PDPT(paddr) ((paddr >> (12 + 9 * 2)) & 0x1FF)
+#define PADDR_TO_IDX_IN_PD(paddr) ((paddr >> (12 + 9 * 1)) & 0x1FF)
+#define PADDR_TO_IDX_IN_PT(paddr) ((paddr >> (12 + 9 * 0)) & 0x1FF)
+
+static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
+{
+	// Also replaces page table structures
+	/*
+  Intel / Linux
+  PML4: pgd_t[512];
+  PDPT: pud_t[512];
+  PD  : pmd_t[512];
+  PT  : pte_t[512];
+  */
+	uint64_t addr;
+	pgd_t *e4;
+	pud_t *t3 = NULL;
+	pud_t *e3;
+	pmd_t *t2 = NULL;
+	pmd_t *e2;
+	pte_t *t1 = NULL;
+	pte_t *e1;
+	uint64_t page_paddr;
+	void *new_page_vaddr;
+	uint64_t new_page_paddr;
+	int i1 = -1, i2 = -1, i3 = -1, i4 = -1;
+	for (addr = start; addr < end;) {
+		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
+			i4 = PADDR_TO_IDX_IN_PML4(addr);
+			printk("ndckpt: PML4[0x%03X]\n", i4);
+			e4 = &t4[i4];
+			if ((e4->pgd & _PAGE_PRESENT) == 0) {
+				addr += PGDIR_SIZE;
+				continue;
+			}
+			t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
+			if (!ndckpt_is_virt_addr_in_nvdimm(t3)) {
+				new_page_vaddr = ndckpt_alloc_zeroed_page();
+				new_page_paddr =
+					ndckpt_virt_to_phys(new_page_vaddr);
+				memcpy(new_page_vaddr, t3, PAGE_SIZE);
+				e4->pgd = (e4->pgd & ~PTE_PFN_MASK) |
+					  new_page_paddr;
+				i4 = -1;
+				printk("ndckpt: replaced\n");
+				continue;
+			}
+		}
+		if (i3 != PADDR_TO_IDX_IN_PDPT(addr)) {
+			i3 = PADDR_TO_IDX_IN_PDPT(addr);
+			printk("ndckpt:  PDPT[0x%03X]\n", i3);
+			e3 = &t3[i3];
+			if ((e3->pud & _PAGE_PRESENT) == 0) {
+				addr += PUD_SIZE;
+				continue;
+			}
+			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
+		}
+		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
+			i2 = PADDR_TO_IDX_IN_PD(addr);
+			printk("ndckpt:   PD  [0x%03X]\n", i2);
+			e2 = &t2[i2];
+			if ((e2->pmd & _PAGE_PRESENT) == 0) {
+				addr += PMD_SIZE;
+				continue;
+			}
+			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
+		}
+		i1 = PADDR_TO_IDX_IN_PT(addr);
+		printk("ndckpt:    PT  [0x%03X]\n", i1);
+		e1 = &t1[i1];
+		if ((e1->pte & _PAGE_PRESENT) == 0) {
+			addr += PAGE_SIZE;
+			continue;
+		}
+		page_paddr = e1->pte & PTE_PFN_MASK;
+		printk("ndckpt:     PAGE @ 0x%016llX v->p 0x%016llX\n", addr,
+		       page_paddr);
+		addr += PAGE_SIZE;
+	}
+}
+
+static void
+replace_stack_pages_with_nvdimm(struct PersistentMemoryManager *pman,
+				struct mm_struct *mm,
+				struct vm_area_struct *vma)
+{
+	printk("ndckpt: Replacing stack vma [0x%016lX - 0x%016lX) with NVDIMM...\n",
+	       vma->vm_start, vma->vm_end);
+	replace_pages_with_nvdimm(mm->pgd, vma->vm_start, vma->vm_end);
+}
+
 static void switch_pgd_to_pmem(struct mm_struct *mm)
 {
 	pgd_t *pgd_on_pmem;
@@ -225,6 +318,12 @@ void ndckpt_handle_execve(struct task_struct *task)
 			printk("ndckpt:   This is heap vma. Set VM_CKPT_TARGET.\n");
 			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 		}
+		if (vma->vm_start <= mm->start_stack &&
+		    mm->start_stack <= vma->vm_end) {
+			printk("ndckpt:   This is stack vma. Set VM_CKPT_TARGET.\n");
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			replace_stack_pages_with_nvdimm(pman, mm, vma);
+		}
 		vma = vma->vm_next;
 	}
 	pproc = pproc_alloc();
@@ -232,6 +331,7 @@ void ndckpt_handle_execve(struct task_struct *task)
 	pman_set_last_proc_info(pman, pproc);
 	printk("pproc: pobj #%lld\n",
 	       pobj_get_header(pman->last_proc_info)->id);
+	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
 }
 EXPORT_SYMBOL(ndckpt_handle_execve);
 
