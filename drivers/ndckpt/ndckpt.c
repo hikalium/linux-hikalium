@@ -110,8 +110,9 @@ static void ndckpt_print_pt(pte_t *pte)
 		e = pte[i].pte;
 		if ((e & _PAGE_PRESENT) == 0)
 			continue;
-		printk("ndckpt:       PAGE[0x%03X] = 0x%016llX on %s\n", i, e,
-		       get_str_dram_or_nvdimm_phys(e & PTE_PFN_MASK));
+		printk("ndckpt:       PAGE[0x%03X] = 0x%016llX on %s %s\n", i,
+		       e, get_str_dram_or_nvdimm_phys(e & PTE_PFN_MASK),
+		       (e & _PAGE_DIRTY) ? "DIRTY" : "clean");
 	}
 }
 
@@ -280,6 +281,82 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 	}
 }
 
+static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
+{
+	uint64_t addr;
+	pgd_t *e4;
+	pud_t *t3 = NULL;
+	pud_t *e3;
+	pmd_t *t2 = NULL;
+	pmd_t *e2;
+	pte_t *t1 = NULL;
+	pte_t *e1;
+	uint64_t page_paddr;
+	void *page_kernel_vaddr;
+	int i1 = -1, i2 = -1, i3 = -1, i4 = -1;
+	printk("ndckpt: flush_dirty_pages: [0x%016llX, 0x%016llX)\n", start,
+	       end);
+	for (addr = start; addr < end;) {
+		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
+			i4 = PADDR_TO_IDX_IN_PML4(addr);
+			e4 = &t4[i4];
+			if ((e4->pgd & _PAGE_PRESENT) == 0) {
+				addr += PGDIR_SIZE;
+				continue;
+			}
+			t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
+		}
+		if (i3 != PADDR_TO_IDX_IN_PDPT(addr)) {
+			i3 = PADDR_TO_IDX_IN_PDPT(addr);
+			e3 = &t3[i3];
+			if ((e3->pud & _PAGE_PRESENT) == 0) {
+				addr += PUD_SIZE;
+				continue;
+			}
+			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
+		}
+		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
+			i2 = PADDR_TO_IDX_IN_PD(addr);
+			e2 = &t2[i2];
+			if ((e2->pmd & _PAGE_PRESENT) == 0) {
+				addr += PMD_SIZE;
+				continue;
+			}
+			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
+		}
+		i1 = PADDR_TO_IDX_IN_PT(addr);
+		e1 = &t1[i1];
+		if ((e1->pte & _PAGE_PRESENT) == 0) {
+			addr += PAGE_SIZE;
+			continue;
+		}
+		page_paddr = e1->pte & PTE_PFN_MASK;
+		page_kernel_vaddr = ndckpt_phys_to_virt(page_paddr);
+		printk("ndckpt:     PAGE @ 0x%016llX v->p 0x%016llX\n", addr,
+		       page_paddr);
+		if (e1->pte & _PAGE_DIRTY) {
+			ndckpt_clwb_range(page_kernel_vaddr, PAGE_SIZE);
+			e1->pte &= ~(uint64_t)_PAGE_DIRTY;
+			printk("ndckpt: flushed dirty page @ 0x%016llX v->p 0x%016llX\n",
+			       addr, page_paddr);
+		}
+		addr += PAGE_SIZE;
+	}
+	ndckpt_sfence();
+	printk("ndckpt: SFENCE() done\n");
+}
+
+static void flush_target_vmas(struct mm_struct *mm)
+{
+	struct vm_area_struct *vma;
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
+			continue;
+		}
+		flush_dirty_pages(mm->pgd, vma->vm_start, vma->vm_end);
+	}
+}
+
 static void
 replace_stack_pages_with_nvdimm(struct PersistentMemoryManager *pman,
 				struct mm_struct *mm,
@@ -375,20 +452,19 @@ EXPORT_SYMBOL(ndckpt_handle_execve);
 int ndckpt_handle_checkpoint(void)
 {
 	// This function should be called under the pt_regs is fully saved on the stack.
+	struct task_struct *task = current;
 	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
 	struct PersistentProcessInfo *pproc = pman->last_proc_info;
-	struct pt_regs *regs = current_pt_regs();
+	struct pt_regs *regs = task_pt_regs(task);
 	if (!(current->flags & PF_NDCKPT_ENABLED))
 		return -EINVAL;
 	pproc_set_regs(pproc, 0, regs);
-	/*
-	printk("ndckpt_handle_checkpoint:\n");
-	printk("  ip  = 0x%016lX\n", regs->ip);
-	printk("  sp  = 0x%016lX\n", regs->sp);
-	printk("  cr3 = 0x%016lX\n", __read_cr3());
 	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
+	flush_target_vmas(task->mm);
+	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
+	for (;;) {
+	}
 	regs->ip -= 0x27;
-  */
 	return 0;
 }
 EXPORT_SYMBOL(ndckpt_handle_checkpoint);
