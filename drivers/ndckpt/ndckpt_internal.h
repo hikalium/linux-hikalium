@@ -56,9 +56,22 @@ struct PersistentObjectHeader {
 };
 
 #define PPROC_SIGNATURE 0x5050534f6d75696cULL
+#define PCTX_REG_IDX_RAX 0
+#define PCTX_REG_IDX_RCX 1
+#define PCTX_REG_IDX_RDX 2
+#define PCTX_REG_IDX_RBX 3
+#define PCTX_REG_IDX_RSP 4
+#define PCTX_REG_IDX_RBP 5
+#define PCTX_REG_IDX_RSI 6
+#define PCTX_REG_IDX_RDI 7
+#define PCTX_REG_IDX_RIP 16
+#define PCTX_REG_IDX_RFLAGS 17
+// gregs[16] + RIP + RFLAGS
+#define PCTX_REGS (16 + 1 + 1)
 struct PersistentProcessInfo {
 	struct PersistentExecutionContext {
 		pgd_t *volatile pgd;
+		uint64_t regs[PCTX_REGS];
 	} ctx[2];
 	volatile uint64_t signature;
 };
@@ -105,6 +118,9 @@ bool pproc_is_valid(struct PersistentProcessInfo *pproc);
 struct PersistentProcessInfo *pproc_alloc(void);
 void pproc_set_pgd(struct PersistentProcessInfo *pproc, int ctx_idx,
 		   pgd_t *pgd);
+void pproc_set_regs(struct PersistentProcessInfo *proc, int ctx_idx,
+		    struct pt_regs *regs);
+void pproc_print_regs(struct PersistentProcessInfo *proc, int ctx_idx);
 void pproc_printk(struct PersistentProcessInfo *pproc);
 
 // @sysfs.c

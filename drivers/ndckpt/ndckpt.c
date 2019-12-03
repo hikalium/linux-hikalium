@@ -317,6 +317,7 @@ void ndckpt_handle_execve(struct task_struct *task)
 	struct vm_area_struct *vma;
 	struct PersistentProcessInfo *pproc;
 	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
+	struct pt_regs *regs = current_pt_regs();
 	mm = task->mm;
 	vma = mm->mmap;
 	printk("ndckpt: ndckpt_handle_execve: pid = %d\n", task->pid);
@@ -357,8 +358,13 @@ void ndckpt_handle_execve(struct task_struct *task)
 		}
 		vma = vma->vm_next;
 	}
+	// Set pproc
 	pproc = pproc_alloc();
 	pproc_set_pgd(pproc, 0, mm->pgd);
+	pproc_set_regs(pproc, 0, regs);
+	pproc_print_regs(pproc, 0);
+	pproc_set_regs(pproc, 1, regs);
+	pproc_print_regs(pproc, 1);
 	pman_set_last_proc_info(pman, pproc);
 	printk("pproc: pobj #%lld\n",
 	       pobj_get_header(pman->last_proc_info)->id);
@@ -369,9 +375,12 @@ EXPORT_SYMBOL(ndckpt_handle_execve);
 int ndckpt_handle_checkpoint(void)
 {
 	// This function should be called under the pt_regs is fully saved on the stack.
-	//struct pt_regs *regs = current_pt_regs();
+	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
+	struct PersistentProcessInfo *pproc = pman->last_proc_info;
+	struct pt_regs *regs = current_pt_regs();
 	if (!(current->flags & PF_NDCKPT_ENABLED))
 		return -EINVAL;
+	pproc_set_regs(pproc, 0, regs);
 	/*
 	printk("ndckpt_handle_checkpoint:\n");
 	printk("  ip  = 0x%016lX\n", regs->ip);
@@ -387,7 +396,6 @@ EXPORT_SYMBOL(ndckpt_handle_checkpoint);
 static int __init ndckpt_module_init(void)
 {
 	BUILD_BUG_ON((sizeof(struct PersistentObjectHeader) > kCacheLineSize));
-	BUILD_BUG_ON((sizeof(struct PersistentProcessInfo) > kCacheLineSize));
 	BUILD_BUG_ON(
 		(sizeof(struct PersistentMemoryManager) > 2 * kCacheLineSize));
 
