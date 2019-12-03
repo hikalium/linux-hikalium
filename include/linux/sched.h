@@ -604,6 +604,9 @@ struct task_struct {
 	/* Per task flags (PF_*), defined further below: */
 	unsigned int			flags;
 	unsigned int			ptrace;
+#ifdef CONFIG_NDCKPT
+  uint64_t ndckpt_id;
+#endif
 
 #ifdef CONFIG_SMP
 	struct llist_node		wake_entry;

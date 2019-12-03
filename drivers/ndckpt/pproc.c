@@ -53,6 +53,33 @@ void pproc_set_regs(struct PersistentProcessInfo *proc, int ctx_idx,
 	ndckpt_sfence();
 }
 
+void pproc_restore_regs(struct pt_regs *regs,
+			struct PersistentProcessInfo *proc, int ctx_idx)
+{
+	// It assumes pt_regs is fully saved.
+	struct PersistentExecutionContext *ctx;
+	BUG_ON(ctx_idx < 0 || 2 <= ctx_idx);
+	ctx = &proc->ctx[ctx_idx];
+	regs->ax = ctx->regs[PCTX_REG_IDX_RAX];
+	regs->cx = ctx->regs[PCTX_REG_IDX_RCX];
+	regs->dx = ctx->regs[PCTX_REG_IDX_RDX];
+	regs->bx = ctx->regs[PCTX_REG_IDX_RBX];
+	regs->sp = ctx->regs[PCTX_REG_IDX_RSP];
+	regs->bp = ctx->regs[PCTX_REG_IDX_RBP];
+	regs->si = ctx->regs[PCTX_REG_IDX_RSI];
+	regs->di = ctx->regs[PCTX_REG_IDX_RDI];
+	regs->r8 = ctx->regs[8];
+	regs->r9 = ctx->regs[9];
+	regs->r10 = ctx->regs[10];
+	regs->r11 = ctx->regs[11];
+	regs->r12 = ctx->regs[12];
+	regs->r13 = ctx->regs[13];
+	regs->r14 = ctx->regs[14];
+	regs->r15 = ctx->regs[15];
+	regs->ip = ctx->regs[PCTX_REG_IDX_RIP];
+	regs->flags = ctx->regs[PCTX_REG_IDX_RFLAGS];
+}
+
 static const char *pctx_reg_names[PCTX_REGS] = {
 	"RAX", "RCX", "RDX", "RBX", "RSP", "RBP", "RSI", "RDI", "R8",
 	"R9",  "R10", "R11", "R12", "R13", "R14", "R15", "RIP", "RFLAGS",

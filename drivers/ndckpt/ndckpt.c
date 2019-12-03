@@ -23,8 +23,12 @@ int ndckpt_enable_checkpointing(struct task_struct *task, int restore_obj_id)
 		return -EINVAL;
 	}
 	task->flags |= PF_NDCKPT_ENABLED;
+	task->ndckpt_id = restore_obj_id;
 	printk("ndckpt: checkpoint enabled on pid=%d\n", task->pid);
 	printk("ndckpt:   task flags = 0x%08X\n", task->flags);
+	if (task->ndckpt_id)
+		printk("ndckpt:   restore from obj id = 0x%016llX\n",
+		       task->ndckpt_id);
 	return 0;
 }
 EXPORT_SYMBOL(ndckpt_enable_checkpointing);
@@ -388,6 +392,123 @@ static void switch_pgd_to_pmem(struct mm_struct *mm)
 	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
 }
 
+static void merge_pgd_with_pmem(struct mm_struct *mm, pgd_t *pgd_on_pmem)
+{
+	uint64_t new_cr3;
+	printk("ndckpt: merge_pgd_with_pmem\n");
+	new_cr3 = (CR3_ADDR_MASK & ndckpt_virt_to_phys(pgd_on_pmem)) |
+		  (CR3_PCID_MASK & __read_cr3()) | CR3_NOFLUSH;
+	printk("ndckpt: cr3(new)  = 0x%016llX\n", new_cr3);
+	mm->pgd = pgd_on_pmem;
+	write_cr3(new_cr3);
+	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
+}
+
+static void erase_mappings_to_dram(pgd_t *t4, uint64_t start, uint64_t end)
+{
+	uint64_t addr;
+	pgd_t *e4;
+	pud_t *t3 = NULL;
+	pud_t *e3;
+	pmd_t *t2 = NULL;
+	pmd_t *e2;
+	pte_t *t1 = NULL;
+	pte_t *e1;
+	uint64_t page_paddr;
+	int i1 = -1, i2 = -1, i3 = -1, i4 = -1;
+	printk("ndckpt: flush_dirty_pages: [0x%016llX, 0x%016llX)\n", start,
+	       end);
+	for (addr = start; addr < end;) {
+		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
+			i4 = PADDR_TO_IDX_IN_PML4(addr);
+			e4 = &t4[i4];
+			if ((e4->pgd & _PAGE_PRESENT) == 0) {
+				addr += PGDIR_SIZE;
+				continue;
+			}
+			t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
+		}
+		if (i3 != PADDR_TO_IDX_IN_PDPT(addr)) {
+			i3 = PADDR_TO_IDX_IN_PDPT(addr);
+			e3 = &t3[i3];
+			if ((e3->pud & _PAGE_PRESENT) == 0) {
+				addr += PUD_SIZE;
+				continue;
+			}
+			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
+		}
+		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
+			i2 = PADDR_TO_IDX_IN_PD(addr);
+			e2 = &t2[i2];
+			if ((e2->pmd & _PAGE_PRESENT) == 0) {
+				addr += PMD_SIZE;
+				continue;
+			}
+			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
+		}
+		i1 = PADDR_TO_IDX_IN_PT(addr);
+		e1 = &t1[i1];
+		if ((e1->pte & _PAGE_PRESENT) == 0) {
+			addr += PAGE_SIZE;
+			continue;
+		}
+		page_paddr = e1->pte & PTE_PFN_MASK;
+		if (!ndckpt_is_phys_addr_in_nvdimm(page_paddr)) {
+			printk("ndckpt: clear mapping to DRAM page @ 0x%016llX v->p 0x%016llX\n",
+			       addr, page_paddr);
+			e1->pte = 0;
+			ndckpt_invlpg((void *)addr);
+		}
+		addr += PAGE_SIZE;
+	}
+	ndckpt_sfence();
+	printk("ndckpt: SFENCE() done\n");
+}
+
+static void handle_execve_resotre(struct task_struct *task,
+				  uint64_t pproc_obj_id)
+{
+	// TODO: use pproc_obj_id to select pobj being restored
+	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
+	struct PersistentProcessInfo *pproc = pman->last_proc_info;
+	struct pt_regs *regs = task_pt_regs(task);
+	struct mm_struct *mm;
+	struct vm_area_struct *vma;
+	mm = task->mm;
+	vma = mm->mmap;
+	printk("ndckpt: restore from obj id = %016llX\n", task->ndckpt_id);
+	pproc_printk(pproc);
+	merge_pgd_with_pmem(task->mm, pproc->ctx[0].pgd);
+	pproc_print_regs(pproc, 0);
+	pproc_restore_regs(regs, pproc, 0);
+	while (vma) {
+		printk("ndckpt: vm_area_struct@0x%016llX\n", (uint64_t)vma);
+		printk("ndckpt:   vm_start = 0x%016llX\n",
+		       (uint64_t)vma->vm_start);
+		printk("ndckpt:   vm_end   = 0x%016llX\n",
+		       (uint64_t)vma->vm_end);
+		printk("ndckpt:   vm_flags   = 0x%016llX\n",
+		       (uint64_t)vma->vm_flags);
+		vma->vm_ckpt_flags = 0;
+		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
+			printk("ndckpt:   This is heap vma. Set VM_CKPT_TARGET.\n");
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+		}
+		if (vma->vm_start <= mm->start_stack &&
+		    mm->start_stack <= vma->vm_end) {
+			printk("ndckpt:   This is stack vma. Set VM_CKPT_TARGET.\n");
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+		}
+		if (vma->vm_start <= mm->start_code &&
+		    mm->start_code <= vma->vm_end) {
+			printk("ndckpt:   This is code vma. clear old mappings.\n");
+			erase_mappings_to_dram(mm->pgd, vma->vm_start,
+					       vma->vm_end);
+		}
+		vma = vma->vm_next;
+	}
+}
+
 void ndckpt_handle_execve(struct task_struct *task)
 {
 	struct mm_struct *mm;
@@ -398,6 +519,10 @@ void ndckpt_handle_execve(struct task_struct *task)
 	mm = task->mm;
 	vma = mm->mmap;
 	printk("ndckpt: ndckpt_handle_execve: pid = %d\n", task->pid);
+	if (task->ndckpt_id) {
+		handle_execve_resotre(task, task->ndckpt_id);
+		return;
+	}
 	printk("ndckpt: start_code  = 0x%016lX\n", mm->start_code);
 	printk("ndckpt: end_code    = 0x%016lX\n", mm->end_code);
 	printk("ndckpt: start_data  = 0x%016lX\n", mm->start_data);
