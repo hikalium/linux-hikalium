@@ -21,6 +21,11 @@ static inline void ndckpt_clwb(volatile void *__p)
 	asm volatile("clwb %0" : "+m"(*(volatile char __force *)__p));
 }
 
+static inline void ndckpt_invlpg(volatile void *__p)
+{
+	asm volatile("invlpg %0" : "+m"(*(volatile char __force *)__p));
+}
+
 static inline void ndckpt_clwb_range(volatile void *p, size_t byte_size)
 {
 	const uint64_t end_addr = (uint64_t)p + byte_size;

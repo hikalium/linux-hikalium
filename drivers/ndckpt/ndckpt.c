@@ -224,6 +224,17 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 				continue;
 			}
 			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
+			if (!ndckpt_is_virt_addr_in_nvdimm(t2)) {
+				new_page_vaddr = ndckpt_alloc_zeroed_page();
+				new_page_paddr =
+					ndckpt_virt_to_phys(new_page_vaddr);
+				memcpy(new_page_vaddr, t2, PAGE_SIZE);
+				e3->pud = (e3->pud & ~PTE_PFN_MASK) |
+					  new_page_paddr;
+				i3 = -1;
+				printk("ndckpt: replaced\n");
+				continue;
+			}
 		}
 		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
 			i2 = PADDR_TO_IDX_IN_PD(addr);
@@ -234,6 +245,17 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 				continue;
 			}
 			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
+			if (!ndckpt_is_virt_addr_in_nvdimm(t1)) {
+				new_page_vaddr = ndckpt_alloc_zeroed_page();
+				new_page_paddr =
+					ndckpt_virt_to_phys(new_page_vaddr);
+				memcpy(new_page_vaddr, t1, PAGE_SIZE);
+				e2->pmd = (e2->pmd & ~PTE_PFN_MASK) |
+					  new_page_paddr;
+				i2 = -1;
+				printk("ndckpt: replaced\n");
+				continue;
+			}
 		}
 		i1 = PADDR_TO_IDX_IN_PT(addr);
 		printk("ndckpt:    PT  [0x%03X]\n", i1);
@@ -245,6 +267,15 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 		page_paddr = e1->pte & PTE_PFN_MASK;
 		printk("ndckpt:     PAGE @ 0x%016llX v->p 0x%016llX\n", addr,
 		       page_paddr);
+		if (!ndckpt_is_phys_addr_in_nvdimm(page_paddr)) {
+			new_page_vaddr = ndckpt_alloc_zeroed_page();
+			new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
+			memcpy(new_page_vaddr, __va(page_paddr), PAGE_SIZE);
+			e1->pte = (e1->pte & ~PTE_PFN_MASK) | new_page_paddr;
+			ndckpt_invlpg((void *)addr);
+			printk("ndckpt: replaced\n");
+			continue;
+		}
 		addr += PAGE_SIZE;
 	}
 }
