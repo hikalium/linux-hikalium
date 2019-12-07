@@ -285,6 +285,64 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 	}
 }
 
+static void printk_pt_range(pgd_t *t4, uint64_t start, uint64_t end)
+{
+	uint64_t addr;
+	pgd_t *e4;
+	pud_t *t3 = NULL;
+	pud_t *e3;
+	pmd_t *t2 = NULL;
+	pmd_t *e2;
+	pte_t *t1 = NULL;
+	pte_t *e1;
+	uint64_t page_paddr;
+	int i1 = -1, i2 = -1, i3 = -1, i4 = -1;
+	for (addr = start; addr < end;) {
+		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
+			i4 = PADDR_TO_IDX_IN_PML4(addr);
+			printk("ndckpt: PML4[0x%03X]\n", i4);
+			e4 = &t4[i4];
+			if ((e4->pgd & _PAGE_PRESENT) == 0) {
+				addr += PGDIR_SIZE;
+				continue;
+			}
+			t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
+		}
+		if (i3 != PADDR_TO_IDX_IN_PDPT(addr)) {
+			i3 = PADDR_TO_IDX_IN_PDPT(addr);
+			printk("ndckpt:  PDPT[0x%03X]\n", i3);
+			e3 = &t3[i3];
+			if ((e3->pud & _PAGE_PRESENT) == 0) {
+				addr += PUD_SIZE;
+				continue;
+			}
+			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
+		}
+		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
+			i2 = PADDR_TO_IDX_IN_PD(addr);
+			printk("ndckpt:   PD  [0x%03X]\n", i2);
+			e2 = &t2[i2];
+			if ((e2->pmd & _PAGE_PRESENT) == 0) {
+				addr += PMD_SIZE;
+				continue;
+			}
+			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
+		}
+		i1 = PADDR_TO_IDX_IN_PT(addr);
+		printk("ndckpt:    PT  [0x%03X]\n", i1);
+		e1 = &t1[i1];
+		if ((e1->pte & _PAGE_PRESENT) == 0) {
+			addr += PAGE_SIZE;
+			continue;
+		}
+		page_paddr = e1->pte & PTE_PFN_MASK;
+		printk("ndckpt:     PAGE @ 0x%016llX v->p 0x%016llX on %s\n",
+		       addr, page_paddr,
+		       get_str_dram_or_nvdimm_phys(page_paddr));
+		addr += PAGE_SIZE;
+	}
+}
+
 static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
 {
 	uint64_t addr;
@@ -502,6 +560,7 @@ static void handle_execve_resotre(struct task_struct *task,
 		if (vma->vm_start <= mm->start_code &&
 		    mm->start_code <= vma->vm_end) {
 			printk("ndckpt:   This is code vma. clear old mappings.\n");
+			printk_pt_range(mm->pgd, vma->vm_start, vma->vm_end);
 			erase_mappings_to_dram(mm->pgd, vma->vm_start,
 					       vma->vm_end);
 		}
