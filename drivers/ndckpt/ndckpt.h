@@ -96,30 +96,7 @@ static inline int ndckpt_is_pmd_points_nvdimm_page(pmd_t e)
 	return ndckpt_is_phys_addr_in_nvdimm(ndckpt_pmd_to_pdpt_paddr(e));
 }
 
-static inline int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d,
-				     unsigned long address)
-{
-	pud_t *new;
-	uint64_t pud_phys;
-	if (!ndckpt_is_enabled_on_current()) {
-		// Alloc on DRAM
-		return __pud_alloc(mm, p4d, address);
-	}
-	// Alloc on NVDIMM
-	// https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L4017
-	new = ndckpt_alloc_zeroed_page();
-	if (!new)
-		return -EINVAL;
-	smp_wmb(); /* See comment in __pte_alloc */
-	spin_lock(&mm->page_table_lock);
-	mm_inc_nr_puds(mm);
-	pud_phys = ndckpt_virt_to_phys(new);
-	printk("ndckpt_pud_alloc: 0x%016llX\n", (uint64_t) new);
-	paravirt_alloc_pud(mm, pud_phys >> PAGE_SHIFT);
-	set_p4d(p4d, __p4d(_PAGE_TABLE | pud_phys));
-	spin_unlock(&mm->page_table_lock);
-	return 0;
-}
+int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address);
 
 static inline pud_t *ndckpt_pud_alloc(struct mm_struct *mm, p4d_t *p4d,
 				      unsigned long address)
@@ -130,30 +107,7 @@ static inline pud_t *ndckpt_pud_alloc(struct mm_struct *mm, p4d_t *p4d,
 		       ndckpt_pud_offset(p4d, address);
 }
 
-static inline int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud,
-				     unsigned long address)
-{
-	pmd_t *new;
-	uint64_t phys;
-	if (!ndckpt_is_enabled_on_current()) {
-		// Alloc on DRAM
-		return __pmd_alloc(mm, pud, address);
-	}
-	// Alloc on NVDIMM
-	// https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L4017
-	new = ndckpt_alloc_zeroed_page();
-	if (!new)
-		return -EINVAL;
-	smp_wmb(); /* See comment in __pte_alloc */
-	spin_lock(&mm->page_table_lock);
-	mm_inc_nr_puds(mm);
-	phys = ndckpt_virt_to_phys(new);
-	printk("ndckpt_pmd_alloc: 0x%016llX\n", (uint64_t) new);
-	paravirt_alloc_pud(mm, phys >> PAGE_SHIFT);
-	set_pud(pud, __pud(_PAGE_TABLE | phys));
-	spin_unlock(&mm->page_table_lock);
-	return 0;
-}
+int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address);
 
 static inline pmd_t *ndckpt_pmd_alloc(struct mm_struct *mm, pud_t *pud,
 				      unsigned long address)
