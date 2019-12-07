@@ -499,6 +499,7 @@ int __pte_alloc(struct mm_struct *mm, pmd_t *pmd)
 	if (likely(pmd_none(*pmd))) {	/* Has another populated it ? */
 		mm_inc_nr_ptes(mm);
 #ifdef CONFIG_NDCKPT
+    // Alloc PT (4th page table structure)
     if(ndckpt_is_enabled_on_current()) {
       ndckpt_pmd_populate(mm, pmd, (pte_t*)ndckpt_alloc_zeroed_page());
     } else{
@@ -3948,11 +3949,25 @@ unlock:
 }
 
 #ifdef CONFIG_NDCKPT
+
+void ndckpt__pte_alloc(struct vm_fault *vmf) {
+  // Alloc leaf pages
+	pte_t pte;
+  uint64_t paddr;
+  paddr = ndckpt_alloc_phys_page();
+  printk("handle_pte_fault: paddr=0x%08llX\n",
+      paddr);
+  // https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L2965
+  pte = pfn_pte(PHYS_PFN(paddr), vmf->vma->vm_page_prot);
+  /* No need to invalidate - it was non-present before */
+  *vmf->pte = pte;
+  update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
+}
+
 static vm_fault_t handle_pte_fault_ndckpt(struct vm_fault *vmf)
 {
 	vm_fault_t fault_code;
 	pte_t pte;
-	uint64_t paddr;
   if (vmf->vma && vmf->vma->vm_start <= current->mm->brk &&
       vmf->vma->vm_end >= current->mm->start_brk) {
     printk("ndckpt: pte fault (heap) NOT existed @ 0x%016lX flags=0x%08X\n",
@@ -3962,14 +3977,7 @@ static vm_fault_t handle_pte_fault_ndckpt(struct vm_fault *vmf)
       fault_code = do_anonymous_page(vmf);
       // vmf->pte will be set by do_anonymous_page()
       BUG_ON(!vmf->pte);
-      paddr = ndckpt_alloc_phys_page();
-      printk("handle_pte_fault: paddr=0x%08llX\n",
-          paddr);
-      // https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L2965
-      pte = pfn_pte(PHYS_PFN(paddr), vmf->vma->vm_page_prot);
-      /* No need to invalidate - it was non-present before */
-      *vmf->pte = pte;
-      update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
+      ndckpt__pte_alloc(vmf);
       return fault_code;
     } else {
       BUG_ON(!(vmf->vma->vm_flags & VM_WRITE));

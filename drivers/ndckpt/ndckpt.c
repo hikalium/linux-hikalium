@@ -661,6 +661,7 @@ EXPORT_SYMBOL(ndckpt_handle_checkpoint);
 
 int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address)
 {
+	// Alloc PDPT (2nd page table structure)
 	pud_t *new;
 	uint64_t pud_phys;
 	if (!ndckpt_is_enabled_on_current()) {
@@ -686,6 +687,7 @@ EXPORT_SYMBOL(ndckpt___pud_alloc);
 
 int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
 {
+	// Alloc PD (3rd page table structure)
 	pmd_t *new;
 	uint64_t phys;
 	if (!ndckpt_is_enabled_on_current()) {
