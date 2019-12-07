@@ -474,8 +474,8 @@ static void erase_mappings_to_dram(pgd_t *t4, uint64_t start, uint64_t end)
 	pte_t *e1;
 	uint64_t page_paddr;
 	int i1 = -1, i2 = -1, i3 = -1, i4 = -1;
-	printk("ndckpt: flush_dirty_pages: [0x%016llX, 0x%016llX)\n", start,
-	       end);
+	printk("ndckpt: erase_mappings_to_dram: [0x%016llX, 0x%016llX)\n",
+	       start, end);
 	for (addr = start; addr < end;) {
 		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
 			i4 = PADDR_TO_IDX_IN_PML4(addr);
@@ -503,6 +503,12 @@ static void erase_mappings_to_dram(pgd_t *t4, uint64_t start, uint64_t end)
 				continue;
 			}
 			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
+			if (!ndckpt_is_virt_addr_in_nvdimm(t1)) {
+				e2->pmd = 0;
+				ndckpt_invlpg((void *)addr);
+				addr += PMD_SIZE;
+				continue;
+			}
 		}
 		i1 = PADDR_TO_IDX_IN_PT(addr);
 		e1 = &t1[i1];
