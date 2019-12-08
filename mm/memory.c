@@ -3950,20 +3950,6 @@ unlock:
 
 #ifdef CONFIG_NDCKPT
 
-void ndckpt__pte_alloc(struct vm_fault *vmf) {
-  // Alloc leaf pages
-	pte_t pte;
-  uint64_t paddr;
-  paddr = ndckpt_alloc_phys_page();
-  printk("handle_pte_fault: paddr=0x%08llX\n",
-      paddr);
-  // https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L2965
-  pte = pfn_pte(PHYS_PFN(paddr), vmf->vma->vm_page_prot);
-  /* No need to invalidate - it was non-present before */
-  *vmf->pte = pte;
-  update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
-}
-
 static vm_fault_t handle_pte_fault_ndckpt(struct vm_fault *vmf)
 {
 	vm_fault_t fault_code;

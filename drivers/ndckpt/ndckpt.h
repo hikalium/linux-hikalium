@@ -136,4 +136,6 @@ static inline pte_t *ndckpt_pte_offset_kernel(pmd_t *pmd, unsigned long address)
 	return (pte_t *)ndckpt_pmd_page_vaddr(*pmd) + pte_index(address);
 }
 
+void ndckpt__pte_alloc(struct vm_fault *vmf);
+
 #endif /* __NDCKPT_H__ */
