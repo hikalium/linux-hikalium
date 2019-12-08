@@ -120,6 +120,18 @@ void pproc_restore_regs(struct pt_regs *regs,
 	regs->flags = ctx->regs[PCTX_REG_IDX_RFLAGS];
 }
 
+static void
+pproc_copy_regs_from_valid_to_running(struct PersistentProcessInfo *proc)
+{
+	// NO FLUSH
+	struct PersistentExecutionContext *src_ctx =
+		&proc->ctx[proc->valid_ctx_idx];
+	struct PersistentExecutionContext *dst_ctx =
+		&proc->ctx[1 - proc->valid_ctx_idx];
+	BUG_ON(proc->valid_ctx_idx < 0 || 2 <= proc->valid_ctx_idx);
+	memcpy(dst_ctx, src_ctx, sizeof(*dst_ctx));
+}
+
 static const char *pctx_reg_names[PCTX_REGS] = {
 	"RAX", "RCX", "RDX", "RBX", "RSP", "RBP", "RSI", "RDI", "R8",
 	"R9",  "R10", "R11", "R12", "R13", "R14", "R15", "RIP", "RFLAGS",
@@ -224,7 +236,7 @@ static inline void traverse_pte(uint64_t addr, pte_t *t1, pte_t **e1, void **t0)
 }
 
 static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
-		       uint64_t end)
+		       uint64_t end, struct vm_area_struct *vma)
 {
 	uint64_t addr;
 	//
@@ -246,6 +258,7 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 	pte_t *dst_e1;
 	void *dst_page_vaddr;
 	//
+	void *tmp_page_addr;
 	pr_ndckpt("sync_pages: [0x%016llX, 0x%016llX)\n", start, end);
 	for (addr = start; addr < end;) {
 		traverse_pml4e(addr, src_t4, &src_e4, &src_t3);
@@ -254,16 +267,17 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 			addr += PGDIR_SIZE;
 			continue;
 		}
-		if (!dst_t3) {
-			pr_ndckpt("PDPT for 0x%016llX is needed.\n", addr);
-			addr += PGDIR_SIZE;
-			continue;
-		}
-		if (!ndckpt_is_virt_addr_in_nvdimm(dst_t3)) {
-			pr_ndckpt("PDPT for 0x%016llX should be on NVDIMM.\n",
+		if (!dst_t3 || !ndckpt_is_virt_addr_in_nvdimm(dst_t3)) {
+			pr_ndckpt("Alloc PDPT for 0x%016llX on NVDIMM.\n",
 				  addr);
-			addr += PGDIR_SIZE;
-			continue;
+			tmp_page_addr = ndckpt_alloc_zeroed_page();
+			if (dst_t3) {
+				memcpy(tmp_page_addr, dst_t3, PAGE_SIZE);
+			}
+			*(p4d_t *)dst_e4 =
+				__p4d(_PAGE_TABLE |
+				      ndckpt_virt_to_phys(tmp_page_addr));
+			continue; // Retry
 		}
 		traverse_pdpte(addr, src_t3, &src_e3, &src_t2);
 		traverse_pdpte(addr, dst_t3, &dst_e3, &dst_t2);
@@ -271,16 +285,15 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 			addr += PUD_SIZE;
 			continue;
 		}
-		if (!dst_t2) {
-			pr_ndckpt(" PD for 0x%016llX is needed.\n", addr);
-			addr += PUD_SIZE;
-			continue;
-		}
-		if (!ndckpt_is_virt_addr_in_nvdimm(dst_t2)) {
-			pr_ndckpt(" PD for 0x%016llX should be on NVDIMM.\n",
-				  addr);
-			addr += PUD_SIZE;
-			continue;
+		if (!dst_t2 || !ndckpt_is_virt_addr_in_nvdimm(dst_t2)) {
+			pr_ndckpt("Alloc PD for 0x%016llX on NVDIMM.\n", addr);
+			tmp_page_addr = ndckpt_alloc_zeroed_page();
+			if (dst_t2) {
+				memcpy(tmp_page_addr, dst_t2, PAGE_SIZE);
+			}
+			*dst_e3 = __pud(_PAGE_TABLE |
+					ndckpt_virt_to_phys(tmp_page_addr));
+			continue; // Retry
 		}
 		traverse_pde(addr, src_t2, &src_e2, &src_t1);
 		traverse_pde(addr, dst_t2, &dst_e2, &dst_t1);
@@ -288,16 +301,15 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 			addr += PMD_SIZE;
 			continue;
 		}
-		if (!dst_t1) {
-			pr_ndckpt("  PT for 0x%016llX is needed.\n", addr);
-			addr += PMD_SIZE;
-			continue;
-		}
-		if (!ndckpt_is_virt_addr_in_nvdimm(dst_t1)) {
-			pr_ndckpt("  PT for 0x%016llX should be on NVDIMM.\n",
-				  addr);
-			addr += PMD_SIZE;
-			continue;
+		if (!dst_t1 || !ndckpt_is_virt_addr_in_nvdimm(dst_t1)) {
+			pr_ndckpt("Alloc PT for 0x%016llX on NVDIMM.\n", addr);
+			tmp_page_addr = ndckpt_alloc_zeroed_page();
+			if (dst_t1) {
+				memcpy(tmp_page_addr, dst_t1, PAGE_SIZE);
+			}
+			*dst_e2 = __pmd(_PAGE_TABLE |
+					ndckpt_virt_to_phys(tmp_page_addr));
+			continue; // Retry
 		}
 		traverse_pte(addr, src_t1, &src_e1, &src_page_vaddr);
 		traverse_pte(addr, dst_t1, &dst_e1, &dst_page_vaddr);
@@ -305,18 +317,23 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 			addr += PAGE_SIZE;
 			continue;
 		}
-		if (!dst_page_vaddr) {
-			pr_ndckpt("   PAGE for 0x%016llX is needed.\n", addr);
-			addr += PAGE_SIZE;
-			continue;
+		if (!dst_page_vaddr ||
+		    !ndckpt_is_virt_addr_in_nvdimm(dst_page_vaddr)) {
+			pr_ndckpt("Alloc PAGE for 0x%016llX on NVDIMM.\n",
+				  addr);
+			tmp_page_addr = ndckpt_alloc_zeroed_page();
+			if (dst_page_vaddr) {
+				memcpy(tmp_page_addr, dst_page_vaddr,
+				       PAGE_SIZE);
+			}
+			*dst_e1 = pfn_pte(
+				PHYS_PFN(ndckpt_virt_to_phys(tmp_page_addr)),
+				vma->vm_page_prot);
+			update_mmu_cache(vma, addr, dst_e1);
+			continue; // Retry
 		}
-		if (!ndckpt_is_virt_addr_in_nvdimm(dst_page_vaddr)) {
-			pr_ndckpt(
-				"   PAGE for 0x%016llX should be on NVDIMM.\n",
-				addr);
-			addr += PAGE_SIZE;
-			continue;
-		}
+		// TODO: Reduce copy with dirty flag
+		memcpy(dst_page_vaddr, src_page_vaddr, PAGE_SIZE);
 		addr += PAGE_SIZE;
 	}
 }
@@ -390,7 +407,7 @@ static void sync_target_vmas(struct mm_struct *mm, pgd_t *dst_pgd)
 		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
 			continue;
 		}
-		sync_pages(mm->pgd, dst_pgd, vma->vm_start, vma->vm_end);
+		sync_pages(mm->pgd, dst_pgd, vma->vm_start, vma->vm_end, vma);
 	}
 }
 
@@ -409,6 +426,7 @@ void pproc_commit(struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 	pr_ndckpt("Sync Ctx #%d -> Ctx #%d\n", prev_running_ctx_idx,
 		  next_running_ctx_idx);
 	sync_target_vmas(mm, pproc->ctx[next_running_ctx_idx].pgd);
+	pproc_copy_regs_from_valid_to_running(pproc);
 }
 
 void pproc_restore(struct task_struct *task,
