@@ -1,1 +1,1 @@
-obj-$(CONFIG_NDCKPT) +=ndckpt.o pman.o pobj.o pproc.o sysfs.o
+obj-$(CONFIG_NDCKPT) +=ndckpt.o pgtable.o pman.o pobj.o pproc.o sysfs.o

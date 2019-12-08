@@ -45,6 +45,16 @@ static inline void ndckpt_sfence(void)
 	asm volatile("sfence");
 }
 
+static inline const char *get_str_dram_or_nvdimm(void *p)
+{
+	return ndckpt_is_virt_addr_in_nvdimm(p) ? "NVDIMM" : ">DRAM<";
+}
+
+static inline const char *get_str_dram_or_nvdimm_phys(uint64_t p)
+{
+	return ndckpt_is_phys_addr_in_nvdimm(p) ? "NVDIMM" : ">DRAM<";
+}
+
 #define POBJ_SIGNATURE 0x4F50534F6D75696CULL
 struct PersistentObjectHeader {
 	// This struct is placed at the end of the page,
@@ -92,6 +102,8 @@ extern struct kobject *kobj_ndckpt;
 extern struct pmem_device *first_pmem_device;
 
 void ndckpt_print_pml4(pgd_t *pgd);
+
+// @pgtable.c
 
 // @pman.c
 bool pman_is_valid(struct PersistentMemoryManager *pman);
