@@ -3,6 +3,24 @@
 
 #include <asm/pgalloc.h>
 
+#define pr_ndckpt(fmt, ...)                                                    \
+	printk("ndckpt %10s@%10s:%3d]: " pr_fmt(fmt), __FUNCTION__, __FILE__,  \
+	       __LINE__, ##__VA_ARGS__)
+
+//#define NDCKPT_DEBUG_PGSTRUCT_ALLOC
+#ifdef NDCKPT_DEBUG_PGSTRUCT_ALLOC
+#define pr_ndckpt_pgalloc(fmt, ...) pr_ndckpt(fmt, ##__VA_ARGS__)
+#else
+#define pr_ndckpt_pgalloc(fmt, ...)
+#endif
+
+//#define NDCKPT_DEBUG_FAULT
+#ifdef NDCKPT_DEBUG_FAULT
+#define pr_ndckpt_fault(fmt, ...) pr_ndckpt(fmt, ##__VA_ARGS__)
+#else
+#define pr_ndckpt_fault(fmt, ...)
+#endif
+
 // struct vm_area_struct -> vm_ckpt_flags
 #define VM_CKPT_TARGET 0x0001
 

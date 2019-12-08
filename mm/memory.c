@@ -1385,7 +1385,7 @@ static void unmap_single_vma(struct mmu_gather *tlb,
 
 #ifdef CONFIG_NDCKPT
   if(vma->vm_ckpt_flags & VM_CKPT_TARGET) {
-    printk("unmap_single_vma: ignore 0x%016lX - 0x%016lX\n", start, end);
+    pr_ndckpt("unmap_single_vma: ignore 0x%016lX - 0x%016lX\n", start, end);
     return;
   }
 #endif
@@ -3059,13 +3059,6 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 					false))
 		goto oom_free_page;
 
-#ifdef CONFIG_NDCKPT
-  if (current->flags & PF_NDCKPT_ENABLED &&
-      (current->flags & PF_FORKNOEXEC) == 0) {
-    printk("ndckpt: Page allocated: pfn=0x%016lX\n", page_to_pfn(page));
-  }
-#endif
-
 	/*
 	 * The memory barrier inside __SetPageUptodate makes sure that
 	 * preceeding stores to the page contents become visible before
@@ -3197,9 +3190,6 @@ static vm_fault_t pte_alloc_one_map(struct vm_fault *vmf)
     // Set vmf->prealloc_pte to vmf->pmd.
     // We can't get struct page for NVDIMM page, doing this without lock.
     // TODO: support lock
-    if(ndckpt_is_enabled_on_current()) {
-      printk("vmf->prealloc_pte\n");
-    }
 		mm_inc_nr_ptes(vma->vm_mm);
 		ndckpt_pmd_populate(vma->vm_mm, vmf->pmd, page_to_virt(vmf->prealloc_pte));
 		vmf->prealloc_pte = NULL;
@@ -3373,9 +3363,6 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct mem_cgroup *memcg,
 	}
 
 	if (!vmf->pte) {
-    if(ndckpt_is_enabled_on_current()){
-      printk("pte_alloc_one_map!\n");
-    }
 		ret = pte_alloc_one_map(vmf);
 		if (ret)
 			return ret;
@@ -3545,7 +3532,7 @@ static vm_fault_t do_fault_around(struct vm_fault *vmf)
 #ifdef CONFIG_NDCKPT
   if (current->flags & PF_NDCKPT_ENABLED &&
       (current->flags & PF_FORKNOEXEC) == 0) {
-    printk("ndckpt: vm_ops->map_pages start_pgoff=0x%016lX end_pgoff=0x%016lX\n", start_pgoff, end_pgoff);
+    pr_ndckpt("vm_ops->map_pages start_pgoff=0x%016lX end_pgoff=0x%016lX\n", start_pgoff, end_pgoff);
   }
 #endif
 
@@ -3956,7 +3943,7 @@ static vm_fault_t handle_pte_fault_ndckpt(struct vm_fault *vmf)
 	pte_t pte;
   if (vmf->vma && vmf->vma->vm_start <= current->mm->brk &&
       vmf->vma->vm_end >= current->mm->start_brk) {
-    printk("ndckpt: pte fault (heap) NOT existed @ 0x%016lX flags=0x%08X\n",
+    pr_ndckpt_fault("pte fault (heap) NOT existed @ 0x%016lX flags=0x%08X\n",
         vmf->address, vmf->flags);
     if (!vmf->pte) {
       BUG_ON(!vma_is_anonymous(vmf->vma));
@@ -3967,7 +3954,7 @@ static vm_fault_t handle_pte_fault_ndckpt(struct vm_fault *vmf)
       return fault_code;
     } else {
       BUG_ON(!(vmf->vma->vm_flags & VM_WRITE));
-      printk("ndckpt: pte fault (heap) already existed @ 0x%016lX flags=0x%08X\n",
+      pr_ndckpt_fault("pte fault (heap) already existed @ 0x%016lX flags=0x%08X\n",
           vmf->address, vmf->flags);
       pte = pte_mkwrite(pte_mkdirty(*vmf->pte));
       /* No need to invalidate - already invalidated by fault */
@@ -3977,19 +3964,19 @@ static vm_fault_t handle_pte_fault_ndckpt(struct vm_fault *vmf)
     }
   } else if (current->mm->start_code <= vmf->address &&
       vmf->address < current->mm->end_code) {
-    printk("  ndckpt: pte fault (code) @ 0x%016lX flags=0x%08X\n",
+    pr_ndckpt_fault("pte fault (code) @ 0x%016lX flags=0x%08X\n",
         vmf->address, vmf->flags);
   } else if (current->mm->start_data <= vmf->address &&
       vmf->address < current->mm->end_data) {
-    printk("  ndckpt: pte fault (data) @ 0x%016lX flags=0x%08X\n",
+    pr_ndckpt_fault("pte fault (data) @ 0x%016lX flags=0x%08X\n",
         vmf->address, vmf->flags);
   } else if (current->mm->start_stack > vmf->address &&
       ((current->mm->start_stack - vmf->address) >> 12) <
       current->mm->stack_vm) {
-    printk("  ndckpt: pte fault (stack) @ 0x%016lX flags=0x%08X\n",
+    pr_ndckpt_fault("pte fault (stack) @ 0x%016lX flags=0x%08X\n",
         vmf->address, vmf->flags);
   } else {
-    printk("  ndckpt: pte fault (?) @ 0x%016lX flags=0x%08X\n",
+    pr_ndckpt_fault("pte fault (?) @ 0x%016lX flags=0x%08X\n",
         vmf->address, vmf->flags);
   }
   return handle_pte_fault_body(vmf);
