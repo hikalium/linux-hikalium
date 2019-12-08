@@ -204,18 +204,6 @@ static void handle_execve_resotre(struct task_struct *task,
 	pproc_restore(task, pproc);
 }
 
-static void switch_mm_context(struct mm_struct *mm, pgd_t *new_pgd)
-{
-	// Set mm->pgd and cr3
-	// https://elixir.bootlin.com/linux/v5.1.3/source/arch/x86/include/asm/tlbflush.h#L131
-	uint64_t new_cr3 = (CR3_ADDR_MASK & ndckpt_virt_to_phys(new_pgd)) |
-			   (CR3_PCID_MASK & __read_cr3()) | CR3_NOFLUSH;
-	pr_ndckpt("cr3(new)  = 0x%016llX\n", new_cr3);
-	mm->pgd = new_pgd;
-	write_cr3(new_cr3);
-	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
-}
-
 static void init_pproc(struct PersistentMemoryManager *pman,
 		       struct mm_struct *mm, struct pt_regs *regs)
 {
@@ -303,10 +291,6 @@ int ndckpt_handle_checkpoint(void)
 	if (!(current->flags & PF_NDCKPT_ENABLED))
 		return -EINVAL;
 	pproc_commit(pproc, task->mm, regs);
-	// At this point, running ctx has become clean so both context is valid.
-	for (;;) {
-	}
-	regs->ip -= 0x27;
 	return 0;
 }
 EXPORT_SYMBOL(ndckpt_handle_checkpoint);

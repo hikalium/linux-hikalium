@@ -55,6 +55,17 @@ static inline const char *get_str_dram_or_nvdimm_phys(uint64_t p)
 	return ndckpt_is_phys_addr_in_nvdimm(p) ? "NVDIMM" : ">DRAM<";
 }
 
+static inline void switch_mm_context(struct mm_struct *mm, pgd_t *new_pgd)
+{
+	// Set mm->pgd and cr3
+	// https://elixir.bootlin.com/linux/v5.1.3/source/arch/x86/include/asm/tlbflush.h#L131
+	uint64_t new_cr3 = (CR3_ADDR_MASK & ndckpt_virt_to_phys(new_pgd)) |
+			   (CR3_PCID_MASK & __read_cr3()) | CR3_NOFLUSH;
+	pr_ndckpt("cr3(new)  = 0x%016llX\n", new_cr3);
+	mm->pgd = new_pgd;
+	write_cr3(new_cr3);
+}
+
 #define POBJ_SIGNATURE 0x4F50534F6D75696CULL
 struct PersistentObjectHeader {
 	// This struct is placed at the end of the page,

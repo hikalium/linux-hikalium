@@ -166,18 +166,6 @@ void pproc_printk(struct PersistentProcessInfo *pproc)
 	}
 }
 
-static void merge_pgd_with_pmem(struct mm_struct *mm, pgd_t *pgd_on_pmem)
-{
-	uint64_t new_cr3;
-	pr_ndckpt("merge_pgd_with_pmem\n");
-	new_cr3 = (CR3_ADDR_MASK & ndckpt_virt_to_phys(pgd_on_pmem)) |
-		  (CR3_PCID_MASK & __read_cr3()) | CR3_NOFLUSH;
-	pr_ndckpt("cr3(new)  = 0x%016llX\n", new_cr3);
-	mm->pgd = pgd_on_pmem;
-	write_cr3(new_cr3);
-	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
-}
-
 static inline uint64_t ndckpt_v2p(void *v)
 {
 	// v can be in NVDIMM or DRAM
@@ -421,6 +409,7 @@ void pproc_commit(struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 	flush_target_vmas(mm);
 	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
 	pr_ndckpt("Ctx #%d has been committed\n", prev_running_ctx_idx);
+	// At this point, running ctx has become clean so both context is valid.
 	pproc_set_valid_ctx(pproc, prev_running_ctx_idx);
 	// prepare next running context
 	pr_ndckpt("Sync Ctx #%d -> Ctx #%d\n", prev_running_ctx_idx,
@@ -441,7 +430,7 @@ void pproc_restore(struct task_struct *task,
 	BUG_ON(valid_ctx_idx < 0 || 2 <= valid_ctx_idx);
 	pr_ndckpt("  valid_ctx_idx: %d\n", valid_ctx_idx);
 	pproc_print_regs(pproc, valid_ctx_idx);
-	merge_pgd_with_pmem(task->mm, pproc->ctx[valid_ctx_idx].pgd);
+	switch_mm_context(task->mm, pproc->ctx[valid_ctx_idx].pgd);
 	pproc_restore_regs(regs, pproc, valid_ctx_idx);
 	while (vma) {
 		pr_ndckpt("vm_area_struct@0x%016llX\n", (uint64_t)vma);
