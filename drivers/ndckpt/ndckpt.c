@@ -478,11 +478,32 @@ static void handle_execve_resotre(struct task_struct *task,
 	}
 }
 
+static void init_pproc(struct PersistentMemoryManager *pman,
+		       struct mm_struct *mm, struct pt_regs *regs)
+{
+	pgd_t *pgd_ctx1;
+	struct PersistentProcessInfo *pproc = pproc_alloc();
+	pr_ndckpt("pproc pobj #%lld\n",
+		  pobj_get_header(pman->last_proc_info)->id);
+	// ctx 0
+	BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(mm->pgd));
+	pproc_set_pgd(pproc, 0, mm->pgd);
+	pproc_set_regs(pproc, 0, regs);
+	pproc_print_regs(pproc, 0);
+	// ctx 1
+	pgd_ctx1 = ndckpt_alloc_zeroed_page();
+	memcpy(pgd_ctx1, mm->pgd, PAGE_SIZE);
+	pproc_set_pgd(pproc, 1, pgd_ctx1);
+	pproc_set_regs(pproc, 1, regs);
+	pproc_print_regs(pproc, 1);
+	// At this point, this process can be recovered from pproc
+	pman_set_last_proc_info(pman, pproc);
+}
+
 void ndckpt_handle_execve(struct task_struct *task)
 {
 	struct mm_struct *mm;
 	struct vm_area_struct *vma;
-	struct PersistentProcessInfo *pproc;
 	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
 	struct pt_regs *regs = current_pt_regs();
 	mm = task->mm;
@@ -525,17 +546,7 @@ void ndckpt_handle_execve(struct task_struct *task)
 		}
 		vma = vma->vm_next;
 	}
-	// Set pproc
-	pproc = pproc_alloc();
-	pproc_set_pgd(pproc, 0, mm->pgd);
-	pproc_set_regs(pproc, 0, regs);
-	pproc_print_regs(pproc, 0);
-	pproc_set_regs(pproc, 1, regs);
-	pproc_print_regs(pproc, 1);
-	pman_set_last_proc_info(pman, pproc);
-	pr_ndckpt("pproc pobj #%lld\n",
-		  pobj_get_header(pman->last_proc_info)->id);
-	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
+	init_pproc(pman, mm, regs);
 }
 EXPORT_SYMBOL(ndckpt_handle_execve);
 

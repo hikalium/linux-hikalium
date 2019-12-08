@@ -19,6 +19,7 @@ struct PersistentProcessInfo *pproc_alloc(void)
 void pproc_set_pgd(struct PersistentProcessInfo *pproc, int ctx_idx, pgd_t *pgd)
 {
 	BUG_ON(ctx_idx < 0 || 2 <= ctx_idx);
+	BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(pgd));
 	pproc->ctx[ctx_idx].pgd = pgd;
 	ndckpt_clwb(&pproc->ctx[ctx_idx].pgd);
 	ndckpt_sfence();
@@ -99,12 +100,16 @@ void pproc_print_regs(struct PersistentProcessInfo *proc, int ctx_idx)
 
 void pproc_printk(struct PersistentProcessInfo *pproc)
 {
+	int i;
 	if (!pproc_is_valid(pproc)) {
 		printk("invalid last_proc_info\n");
 		return;
 	}
 	printk("PersistentProcessInfo at pobj #%lld:\n",
 	       pobj_get_header(pproc)->id);
-	ndckpt_print_pml4(pproc->ctx[0].pgd);
-	pproc_print_regs(pproc, 0);
+	for (i = 0; i < 2; i++) {
+		pr_ndckpt("Ctx #%d:\n", i);
+		ndckpt_print_pml4(pproc->ctx[i].pgd);
+		pproc_print_regs(pproc, i);
+	}
 }
