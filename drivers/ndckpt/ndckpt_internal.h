@@ -116,6 +116,7 @@ bool pproc_is_valid(struct PersistentProcessInfo *pproc);
 struct PersistentProcessInfo *pproc_alloc(void);
 void pproc_set_pgd(struct PersistentProcessInfo *pproc, int ctx_idx,
 		   pgd_t *pgd);
+void pproc_set_valid_ctx(struct PersistentProcessInfo *pproc, int ctx_idx);
 void pproc_set_regs(struct PersistentProcessInfo *proc, int ctx_idx,
 		    struct pt_regs *regs);
 void pproc_restore_regs(struct pt_regs *regs,

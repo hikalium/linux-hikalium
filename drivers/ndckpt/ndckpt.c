@@ -320,6 +320,7 @@ static void init_pproc(struct PersistentMemoryManager *pman,
 	pproc_set_pgd(pproc, 1, pgd_ctx1);
 	pproc_set_regs(pproc, 1, regs);
 	pproc_print_regs(pproc, 1);
+	pproc_set_valid_ctx(pproc, 0);
 	// At this point, this process can be recovered from pproc
 	pman_set_last_proc_info(pman, pproc);
 }

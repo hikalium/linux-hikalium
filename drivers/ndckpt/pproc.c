@@ -19,6 +19,7 @@ struct PersistentProcessInfo {
 		pgd_t *volatile pgd;
 		uint64_t regs[PCTX_REGS];
 	} ctx[2];
+	int valid_ctx_idx;
 	volatile uint64_t signature;
 };
 
@@ -32,6 +33,7 @@ struct PersistentProcessInfo *pproc_alloc(void)
 	struct PersistentProcessInfo *pproc = ndckpt_alloc_zeroed_page();
 	pproc->ctx[0].pgd = NULL;
 	pproc->ctx[1].pgd = NULL;
+	pproc->valid_ctx_idx = -1;
 	pproc->signature = PPROC_SIGNATURE;
 	ndckpt_clwb(&pproc->signature);
 	ndckpt_sfence();
@@ -45,6 +47,15 @@ void pproc_set_pgd(struct PersistentProcessInfo *pproc, int ctx_idx, pgd_t *pgd)
 	pproc->ctx[ctx_idx].pgd = pgd;
 	ndckpt_clwb(&pproc->ctx[ctx_idx].pgd);
 	ndckpt_sfence();
+}
+
+void pproc_set_valid_ctx(struct PersistentProcessInfo *pproc, int ctx_idx)
+{
+	BUG_ON(ctx_idx < 0 || 2 <= ctx_idx);
+	pproc->valid_ctx_idx = ctx_idx;
+	ndckpt_clwb(&pproc->valid_ctx_idx);
+	ndckpt_sfence();
+	pr_ndckpt("Ctx #%d is marked as valid\n", ctx_idx);
 }
 
 void pproc_set_regs(struct PersistentProcessInfo *proc, int ctx_idx,
@@ -129,6 +140,7 @@ void pproc_printk(struct PersistentProcessInfo *pproc)
 	}
 	printk("PersistentProcessInfo at pobj #%lld:\n",
 	       pobj_get_header(pproc)->id);
+	printk("  Ctx #%d is valid\n", pproc->valid_ctx_idx);
 	for (i = 0; i < 2; i++) {
 		pr_ndckpt("Ctx #%d:\n", i);
 		ndckpt_print_pml4(pproc->ctx[i].pgd);
@@ -154,11 +166,14 @@ void pproc_restore(struct task_struct *task,
 	struct pt_regs *regs = task_pt_regs(task);
 	struct mm_struct *mm = task->mm;
 	struct vm_area_struct *vma = mm->mmap;
+	const int valid_ctx_idx = pproc->valid_ctx_idx;
 	pr_ndckpt("restore from obj id = %016llX\n", task->ndckpt_id);
 	pproc_printk(pproc);
-	merge_pgd_with_pmem(task->mm, pproc->ctx[0].pgd);
-	pproc_print_regs(pproc, 0);
-	pproc_restore_regs(regs, pproc, 0);
+	BUG_ON(valid_ctx_idx < 0 || 2 <= valid_ctx_idx);
+	pr_ndckpt("  valid_ctx_idx: %d\n", valid_ctx_idx);
+	pproc_print_regs(pproc, valid_ctx_idx);
+	merge_pgd_with_pmem(task->mm, pproc->ctx[valid_ctx_idx].pgd);
+	pproc_restore_regs(regs, pproc, valid_ctx_idx);
 	while (vma) {
 		pr_ndckpt("vm_area_struct@0x%016llX\n", (uint64_t)vma);
 		pr_ndckpt("  vm_start = 0x%016llX\n", (uint64_t)vma->vm_start);
