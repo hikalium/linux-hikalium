@@ -186,111 +186,13 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 	}
 }
 
-static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
-{
-	uint64_t addr;
-	pgd_t *e4;
-	pud_t *t3 = NULL;
-	pud_t *e3;
-	pmd_t *t2 = NULL;
-	pmd_t *e2;
-	pte_t *t1 = NULL;
-	pte_t *e1;
-	uint64_t page_paddr;
-	void *page_kernel_vaddr;
-	int i1 = -1, i2 = -1, i3 = -1, i4 = -1;
-	pr_ndckpt("flush_dirty_pages: [0x%016llX, 0x%016llX)\n", start, end);
-	for (addr = start; addr < end;) {
-		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
-			i4 = PADDR_TO_IDX_IN_PML4(addr);
-			e4 = &t4[i4];
-			if ((e4->pgd & _PAGE_PRESENT) == 0) {
-				addr += PGDIR_SIZE;
-				continue;
-			}
-			t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
-		}
-		if (i3 != PADDR_TO_IDX_IN_PDPT(addr)) {
-			i3 = PADDR_TO_IDX_IN_PDPT(addr);
-			e3 = &t3[i3];
-			if ((e3->pud & _PAGE_PRESENT) == 0) {
-				addr += PUD_SIZE;
-				continue;
-			}
-			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
-		}
-		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
-			i2 = PADDR_TO_IDX_IN_PD(addr);
-			e2 = &t2[i2];
-			if ((e2->pmd & _PAGE_PRESENT) == 0) {
-				addr += PMD_SIZE;
-				continue;
-			}
-			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
-		}
-		i1 = PADDR_TO_IDX_IN_PT(addr);
-		e1 = &t1[i1];
-		if ((e1->pte & _PAGE_PRESENT) == 0) {
-			addr += PAGE_SIZE;
-			continue;
-		}
-		page_paddr = e1->pte & PTE_PFN_MASK;
-		page_kernel_vaddr = ndckpt_phys_to_virt(page_paddr);
-		pr_ndckpt("    PAGE @ 0x%016llX v->p 0x%016llX\n", addr,
-			  page_paddr);
-		if (e1->pte & _PAGE_DIRTY) {
-			ndckpt_clwb_range(page_kernel_vaddr, PAGE_SIZE);
-			e1->pte &= ~(uint64_t)_PAGE_DIRTY;
-			pr_ndckpt(
-				"flushed dirty page @ 0x%016llX v->p 0x%016llX\n",
-				addr, page_paddr);
-		}
-		addr += PAGE_SIZE;
-	}
-	ndckpt_sfence();
-	pr_ndckpt("SFENCE() done\n");
-}
-
-static void flush_target_vmas(struct mm_struct *mm)
-{
-	struct vm_area_struct *vma;
-	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
-			continue;
-		}
-		flush_dirty_pages(mm->pgd, vma->vm_start, vma->vm_end);
-	}
-}
-
 static void
 replace_stack_pages_with_nvdimm(struct PersistentMemoryManager *pman,
-				struct mm_struct *mm,
-				struct vm_area_struct *vma)
+				pgd_t *pgd, struct vm_area_struct *vma)
 {
 	pr_ndckpt("Replacing stack vma [0x%016lX - 0x%016lX) with NVDIMM...\n",
 		  vma->vm_start, vma->vm_end);
-	replace_pages_with_nvdimm(mm->pgd, vma->vm_start, vma->vm_end);
-}
-
-static void switch_pgd_to_pmem(struct mm_struct *mm)
-{
-	pgd_t *pgd_on_pmem;
-	uint64_t new_cr3;
-	pr_ndckpt("pgd       = 0x%016llX\n", (uint64_t)mm->pgd);
-	pr_ndckpt("pgd(phys) = 0x%016llX\n", virt_to_phys(mm->pgd));
-	pr_ndckpt("cr3       = 0x%016lX\n", __read_cr3());
-	BUG_ON((__read_cr3() & CR3_ADDR_MASK) != virt_to_phys(mm->pgd));
-	pgd_on_pmem = pman_alloc_pages(first_pmem_device->virt_addr, 1);
-
-	memcpy(pgd_on_pmem, mm->pgd, PAGE_SIZE);
-
-	// https://elixir.bootlin.com/linux/v5.1.3/source/arch/x86/include/asm/tlbflush.h#L131
-	new_cr3 = (CR3_ADDR_MASK & ndckpt_virt_to_phys(pgd_on_pmem)) |
-		  (CR3_PCID_MASK & __read_cr3()) | CR3_NOFLUSH;
-	pr_ndckpt("cr3(new)  = 0x%016llX\n", new_cr3);
-	mm->pgd = pgd_on_pmem;
-	write_cr3(new_cr3);
-	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
+	replace_pages_with_nvdimm(pgd, vma->vm_start, vma->vm_end);
 }
 
 static void handle_execve_resotre(struct task_struct *task,
@@ -302,16 +204,31 @@ static void handle_execve_resotre(struct task_struct *task,
 	pproc_restore(task, pproc);
 }
 
+static void switch_mm_context(struct mm_struct *mm, pgd_t *new_pgd)
+{
+	// Set mm->pgd and cr3
+	// https://elixir.bootlin.com/linux/v5.1.3/source/arch/x86/include/asm/tlbflush.h#L131
+	uint64_t new_cr3 = (CR3_ADDR_MASK & ndckpt_virt_to_phys(new_pgd)) |
+			   (CR3_PCID_MASK & __read_cr3()) | CR3_NOFLUSH;
+	pr_ndckpt("cr3(new)  = 0x%016llX\n", new_cr3);
+	mm->pgd = new_pgd;
+	write_cr3(new_cr3);
+	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
+}
+
 static void init_pproc(struct PersistentMemoryManager *pman,
 		       struct mm_struct *mm, struct pt_regs *regs)
 {
+	struct vm_area_struct *vma = mm->mmap;
+	pgd_t *pgd_ctx0;
 	pgd_t *pgd_ctx1;
 	struct PersistentProcessInfo *pproc = pproc_alloc();
 	pr_ndckpt("pproc pobj #%lld\n",
 		  pobj_get_header(pman->last_proc_info)->id);
 	// ctx 0
-	BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(mm->pgd));
-	pproc_set_pgd(pproc, 0, mm->pgd);
+	pgd_ctx0 = ndckpt_alloc_zeroed_page();
+	memcpy(pgd_ctx0, mm->pgd, PAGE_SIZE);
+	pproc_set_pgd(pproc, 0, pgd_ctx0);
 	pproc_set_regs(pproc, 0, regs);
 	pproc_print_regs(pproc, 0);
 	// ctx 1
@@ -320,36 +237,7 @@ static void init_pproc(struct PersistentMemoryManager *pman,
 	pproc_set_pgd(pproc, 1, pgd_ctx1);
 	pproc_set_regs(pproc, 1, regs);
 	pproc_print_regs(pproc, 1);
-	pproc_set_valid_ctx(pproc, 0);
-	// At this point, this process can be recovered from pproc
-	pman_set_last_proc_info(pman, pproc);
-}
-
-void ndckpt_handle_execve(struct task_struct *task)
-{
-	struct mm_struct *mm;
-	struct vm_area_struct *vma;
-	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
-	struct pt_regs *regs = current_pt_regs();
-	mm = task->mm;
-	vma = mm->mmap;
-	pr_ndckpt("pid = %d\n", task->pid);
-	if (task->ndckpt_id) {
-		handle_execve_resotre(task, task->ndckpt_id);
-		return;
-	}
-	pr_ndckpt(" start_code  = 0x%016lX\n", mm->start_code);
-	pr_ndckpt(" end_code    = 0x%016lX\n", mm->end_code);
-	pr_ndckpt(" start_data  = 0x%016lX\n", mm->start_data);
-	pr_ndckpt(" end_data    = 0x%016lX\n", mm->end_data);
-	pr_ndckpt(" start_brk  = 0x%016lX\n", mm->start_brk);
-	pr_ndckpt(" brk    = 0x%016lX\n", mm->brk);
-	pr_ndckpt(" start_stack = 0x%016lX\n", mm->start_stack);
-	pr_ndckpt(" stack_vm    = %ld\n", mm->stack_vm);
-
-	BUG_ON(pgtable_l5_enabled());
-	switch_pgd_to_pmem(mm);
-
+	// Set vma flags and replace stack pages with NVDIMM
 	while (vma) {
 		pr_ndckpt("vm_area_struct@0x%016llX\n", (uint64_t)vma);
 		pr_ndckpt("  vm_start = 0x%016llX\n", (uint64_t)vma->vm_start);
@@ -367,10 +255,40 @@ void ndckpt_handle_execve(struct task_struct *task)
 		    mm->start_stack <= vma->vm_end) {
 			pr_ndckpt("  This is stack vma. Set VM_CKPT_TARGET.\n");
 			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
-			replace_stack_pages_with_nvdimm(pman, mm, vma);
+			replace_stack_pages_with_nvdimm(pman, pgd_ctx0, vma);
+			replace_stack_pages_with_nvdimm(pman, pgd_ctx1, vma);
 		}
 		vma = vma->vm_next;
 	}
+	// Set ctx 0: running, ctx 1: valid
+	switch_mm_context(mm, pgd_ctx0);
+	pproc_set_valid_ctx(pproc, 1);
+	// At this point, this process can be recovered from pproc
+	pman_set_last_proc_info(pman, pproc);
+}
+
+void ndckpt_handle_execve(struct task_struct *task)
+{
+	struct mm_struct *mm;
+	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
+	struct pt_regs *regs = current_pt_regs();
+	mm = task->mm;
+	pr_ndckpt("pid = %d\n", task->pid);
+	if (task->ndckpt_id) {
+		handle_execve_resotre(task, task->ndckpt_id);
+		return;
+	}
+	pr_ndckpt(" start_code  = 0x%016lX\n", mm->start_code);
+	pr_ndckpt(" end_code    = 0x%016lX\n", mm->end_code);
+	pr_ndckpt(" start_data  = 0x%016lX\n", mm->start_data);
+	pr_ndckpt(" end_data    = 0x%016lX\n", mm->end_data);
+	pr_ndckpt(" start_brk  = 0x%016lX\n", mm->start_brk);
+	pr_ndckpt(" brk    = 0x%016lX\n", mm->brk);
+	pr_ndckpt(" start_stack = 0x%016lX\n", mm->start_stack);
+	pr_ndckpt(" stack_vm    = %ld\n", mm->stack_vm);
+
+	BUG_ON(pgtable_l5_enabled());
+
 	init_pproc(pman, mm, regs);
 }
 EXPORT_SYMBOL(ndckpt_handle_execve);
@@ -384,10 +302,8 @@ int ndckpt_handle_checkpoint(void)
 	struct pt_regs *regs = task_pt_regs(task);
 	if (!(current->flags & PF_NDCKPT_ENABLED))
 		return -EINVAL;
-	pproc_set_regs(pproc, 0, regs);
-	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
-	flush_target_vmas(task->mm);
-	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
+	pproc_commit(pproc, task->mm, regs);
+	// At this point, running ctx has become clean so both context is valid.
 	for (;;) {
 	}
 	regs->ip -= 0x27;
