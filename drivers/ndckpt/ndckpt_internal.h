@@ -65,27 +65,6 @@ struct PersistentObjectHeader {
 	struct PersistentObjectHeader *volatile next;
 };
 
-#define PPROC_SIGNATURE 0x5050534f6d75696cULL
-#define PCTX_REG_IDX_RAX 0
-#define PCTX_REG_IDX_RCX 1
-#define PCTX_REG_IDX_RDX 2
-#define PCTX_REG_IDX_RBX 3
-#define PCTX_REG_IDX_RSP 4
-#define PCTX_REG_IDX_RBP 5
-#define PCTX_REG_IDX_RSI 6
-#define PCTX_REG_IDX_RDI 7
-#define PCTX_REG_IDX_RIP 16
-#define PCTX_REG_IDX_RFLAGS 17
-// gregs[16] + RIP + RFLAGS
-#define PCTX_REGS (16 + 1 + 1)
-struct PersistentProcessInfo {
-	struct PersistentExecutionContext {
-		pgd_t *volatile pgd;
-		uint64_t regs[PCTX_REGS];
-	} ctx[2];
-	volatile uint64_t signature;
-};
-
 #define PMAN_SIGNATURE 0x4D50534F6D75696CULL
 struct PersistentMemoryManager {
 	volatile uint64_t page_idx; // in virtual addr
@@ -101,9 +80,15 @@ struct PersistentMemoryManager {
 extern struct kobject *kobj_ndckpt;
 extern struct pmem_device *first_pmem_device;
 
-void ndckpt_print_pml4(pgd_t *pgd);
-
 // @pgtable.c
+#define PADDR_TO_IDX_IN_PML4(paddr) ((paddr >> (12 + 9 * 3)) & 0x1FF)
+#define PADDR_TO_IDX_IN_PDPT(paddr) ((paddr >> (12 + 9 * 2)) & 0x1FF)
+#define PADDR_TO_IDX_IN_PD(paddr) ((paddr >> (12 + 9 * 1)) & 0x1FF)
+#define PADDR_TO_IDX_IN_PT(paddr) ((paddr >> (12 + 9 * 0)) & 0x1FF)
+
+void ndckpt_print_pml4(pgd_t *pgd);
+void erase_mappings_to_dram(pgd_t *t4, uint64_t start, uint64_t end);
+void pr_ndckpt_pgtable_range(pgd_t *t4, uint64_t start, uint64_t end);
 
 // @pman.c
 bool pman_is_valid(struct PersistentMemoryManager *pman);
@@ -126,6 +111,7 @@ struct PersistentObjectHeader *pobj_get_header(void *addr);
 void pobj_printk(struct PersistentObjectHeader *pobj);
 
 // @pproc.c
+struct PersistentProcessInfo;
 bool pproc_is_valid(struct PersistentProcessInfo *pproc);
 struct PersistentProcessInfo *pproc_alloc(void);
 void pproc_set_pgd(struct PersistentProcessInfo *pproc, int ctx_idx,
@@ -136,6 +122,8 @@ void pproc_restore_regs(struct pt_regs *regs,
 			struct PersistentProcessInfo *proc, int ctx_idx);
 void pproc_print_regs(struct PersistentProcessInfo *proc, int ctx_idx);
 void pproc_printk(struct PersistentProcessInfo *pproc);
+void pproc_restore(struct task_struct *task,
+		   struct PersistentProcessInfo *pproc);
 
 // @sysfs.c
 int sysfs_interface_init(void);

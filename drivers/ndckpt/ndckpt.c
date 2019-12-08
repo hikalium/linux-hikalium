@@ -77,11 +77,6 @@ int ndckpt_is_virt_addr_in_nvdimm(void *vaddr)
 }
 EXPORT_SYMBOL(ndckpt_is_virt_addr_in_nvdimm);
 
-#define PADDR_TO_IDX_IN_PML4(paddr) ((paddr >> (12 + 9 * 3)) & 0x1FF)
-#define PADDR_TO_IDX_IN_PDPT(paddr) ((paddr >> (12 + 9 * 2)) & 0x1FF)
-#define PADDR_TO_IDX_IN_PD(paddr) ((paddr >> (12 + 9 * 1)) & 0x1FF)
-#define PADDR_TO_IDX_IN_PT(paddr) ((paddr >> (12 + 9 * 0)) & 0x1FF)
-
 static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 {
 	// Also replaces page table structures
@@ -187,63 +182,6 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 			pr_ndckpt("replaced\n");
 			continue;
 		}
-		addr += PAGE_SIZE;
-	}
-}
-
-static void pr_ndckpt_pt_range(pgd_t *t4, uint64_t start, uint64_t end)
-{
-	uint64_t addr;
-	pgd_t *e4;
-	pud_t *t3 = NULL;
-	pud_t *e3;
-	pmd_t *t2 = NULL;
-	pmd_t *e2;
-	pte_t *t1 = NULL;
-	pte_t *e1;
-	uint64_t page_paddr;
-	int i1 = -1, i2 = -1, i3 = -1, i4 = -1;
-	for (addr = start; addr < end;) {
-		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
-			i4 = PADDR_TO_IDX_IN_PML4(addr);
-			pr_ndckpt("PML4[0x%03X]\n", i4);
-			e4 = &t4[i4];
-			if ((e4->pgd & _PAGE_PRESENT) == 0) {
-				addr += PGDIR_SIZE;
-				continue;
-			}
-			t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
-		}
-		if (i3 != PADDR_TO_IDX_IN_PDPT(addr)) {
-			i3 = PADDR_TO_IDX_IN_PDPT(addr);
-			pr_ndckpt(" PDPT[0x%03X]\n", i3);
-			e3 = &t3[i3];
-			if ((e3->pud & _PAGE_PRESENT) == 0) {
-				addr += PUD_SIZE;
-				continue;
-			}
-			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
-		}
-		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
-			i2 = PADDR_TO_IDX_IN_PD(addr);
-			pr_ndckpt("  PD  [0x%03X]\n", i2);
-			e2 = &t2[i2];
-			if ((e2->pmd & _PAGE_PRESENT) == 0) {
-				addr += PMD_SIZE;
-				continue;
-			}
-			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
-		}
-		i1 = PADDR_TO_IDX_IN_PT(addr);
-		pr_ndckpt("   PT  [0x%03X]\n", i1);
-		e1 = &t1[i1];
-		if ((e1->pte & _PAGE_PRESENT) == 0) {
-			addr += PAGE_SIZE;
-			continue;
-		}
-		page_paddr = e1->pte & PTE_PFN_MASK;
-		pr_ndckpt("    PAGE @ 0x%016llX v->p 0x%016llX on %s\n", addr,
-			  page_paddr, get_str_dram_or_nvdimm_phys(page_paddr));
 		addr += PAGE_SIZE;
 	}
 }
@@ -355,127 +293,13 @@ static void switch_pgd_to_pmem(struct mm_struct *mm)
 	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
 }
 
-static void merge_pgd_with_pmem(struct mm_struct *mm, pgd_t *pgd_on_pmem)
-{
-	uint64_t new_cr3;
-	pr_ndckpt("merge_pgd_with_pmem\n");
-	new_cr3 = (CR3_ADDR_MASK & ndckpt_virt_to_phys(pgd_on_pmem)) |
-		  (CR3_PCID_MASK & __read_cr3()) | CR3_NOFLUSH;
-	pr_ndckpt("cr3(new)  = 0x%016llX\n", new_cr3);
-	mm->pgd = pgd_on_pmem;
-	write_cr3(new_cr3);
-	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
-}
-
-static void erase_mappings_to_dram(pgd_t *t4, uint64_t start, uint64_t end)
-{
-	uint64_t addr;
-	pgd_t *e4;
-	pud_t *t3 = NULL;
-	pud_t *e3;
-	pmd_t *t2 = NULL;
-	pmd_t *e2;
-	pte_t *t1 = NULL;
-	pte_t *e1;
-	uint64_t page_paddr;
-	int i1 = -1, i2 = -1, i3 = -1, i4 = -1;
-	pr_ndckpt("erase_mappings_to_dram: [0x%016llX, 0x%016llX)\n", start,
-		  end);
-	for (addr = start; addr < end;) {
-		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
-			i4 = PADDR_TO_IDX_IN_PML4(addr);
-			e4 = &t4[i4];
-			if ((e4->pgd & _PAGE_PRESENT) == 0) {
-				addr += PGDIR_SIZE;
-				continue;
-			}
-			t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
-		}
-		if (i3 != PADDR_TO_IDX_IN_PDPT(addr)) {
-			i3 = PADDR_TO_IDX_IN_PDPT(addr);
-			e3 = &t3[i3];
-			if ((e3->pud & _PAGE_PRESENT) == 0) {
-				addr += PUD_SIZE;
-				continue;
-			}
-			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
-		}
-		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
-			i2 = PADDR_TO_IDX_IN_PD(addr);
-			e2 = &t2[i2];
-			if ((e2->pmd & _PAGE_PRESENT) == 0) {
-				addr += PMD_SIZE;
-				continue;
-			}
-			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
-			if (!ndckpt_is_virt_addr_in_nvdimm(t1)) {
-				e2->pmd = 0;
-				ndckpt_invlpg((void *)addr);
-				addr += PMD_SIZE;
-				continue;
-			}
-		}
-		i1 = PADDR_TO_IDX_IN_PT(addr);
-		e1 = &t1[i1];
-		if ((e1->pte & _PAGE_PRESENT) == 0) {
-			addr += PAGE_SIZE;
-			continue;
-		}
-		page_paddr = e1->pte & PTE_PFN_MASK;
-		if (!ndckpt_is_phys_addr_in_nvdimm(page_paddr)) {
-			pr_ndckpt(
-				"clear mapping to DRAM page @ 0x%016llX v->p 0x%016llX\n",
-				addr, page_paddr);
-			e1->pte = 0;
-			ndckpt_invlpg((void *)addr);
-		}
-		addr += PAGE_SIZE;
-	}
-	ndckpt_sfence();
-	pr_ndckpt("SFENCE() done\n");
-}
-
 static void handle_execve_resotre(struct task_struct *task,
 				  uint64_t pproc_obj_id)
 {
 	// TODO: use pproc_obj_id to select pobj being restored
 	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
 	struct PersistentProcessInfo *pproc = pman->last_proc_info;
-	struct pt_regs *regs = task_pt_regs(task);
-	struct mm_struct *mm;
-	struct vm_area_struct *vma;
-	mm = task->mm;
-	vma = mm->mmap;
-	pr_ndckpt("restore from obj id = %016llX\n", task->ndckpt_id);
-	pproc_printk(pproc);
-	merge_pgd_with_pmem(task->mm, pproc->ctx[0].pgd);
-	pproc_print_regs(pproc, 0);
-	pproc_restore_regs(regs, pproc, 0);
-	while (vma) {
-		pr_ndckpt("vm_area_struct@0x%016llX\n", (uint64_t)vma);
-		pr_ndckpt("  vm_start = 0x%016llX\n", (uint64_t)vma->vm_start);
-		pr_ndckpt("  vm_end   = 0x%016llX\n", (uint64_t)vma->vm_end);
-		pr_ndckpt("  vm_flags   = 0x%016llX\n",
-			  (uint64_t)vma->vm_flags);
-		vma->vm_ckpt_flags = 0;
-		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
-			pr_ndckpt("  This is heap vma. Set VM_CKPT_TARGET.\n");
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
-		}
-		if (vma->vm_start <= mm->start_stack &&
-		    mm->start_stack <= vma->vm_end) {
-			pr_ndckpt("  This is stack vma. Set VM_CKPT_TARGET.\n");
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
-		}
-		if (vma->vm_start <= mm->start_code &&
-		    mm->start_code <= vma->vm_end) {
-			pr_ndckpt("  This is code vma. clear old mappings.\n");
-			pr_ndckpt_pt_range(mm->pgd, vma->vm_start, vma->vm_end);
-			erase_mappings_to_dram(mm->pgd, vma->vm_start,
-					       vma->vm_end);
-		}
-		vma = vma->vm_next;
-	}
+	pproc_restore(task, pproc);
 }
 
 static void init_pproc(struct PersistentMemoryManager *pman,

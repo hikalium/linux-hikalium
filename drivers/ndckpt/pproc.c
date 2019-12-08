@@ -1,5 +1,27 @@
 #include "ndckpt_internal.h"
 
+#define PPROC_SIGNATURE 0x5050534f6d75696cULL
+#define PCTX_REG_IDX_RAX 0
+#define PCTX_REG_IDX_RCX 1
+#define PCTX_REG_IDX_RDX 2
+#define PCTX_REG_IDX_RBX 3
+#define PCTX_REG_IDX_RSP 4
+#define PCTX_REG_IDX_RBP 5
+#define PCTX_REG_IDX_RSI 6
+#define PCTX_REG_IDX_RDI 7
+#define PCTX_REG_IDX_RIP 16
+#define PCTX_REG_IDX_RFLAGS 17
+// gregs[16] + RIP + RFLAGS
+#define PCTX_REGS (16 + 1 + 1)
+
+struct PersistentProcessInfo {
+	struct PersistentExecutionContext {
+		pgd_t *volatile pgd;
+		uint64_t regs[PCTX_REGS];
+	} ctx[2];
+	volatile uint64_t signature;
+};
+
 bool pproc_is_valid(struct PersistentProcessInfo *pproc)
 {
 	return pproc && pproc->signature == PPROC_SIGNATURE;
@@ -111,5 +133,56 @@ void pproc_printk(struct PersistentProcessInfo *pproc)
 		pr_ndckpt("Ctx #%d:\n", i);
 		ndckpt_print_pml4(pproc->ctx[i].pgd);
 		pproc_print_regs(pproc, i);
+	}
+}
+
+static void merge_pgd_with_pmem(struct mm_struct *mm, pgd_t *pgd_on_pmem)
+{
+	uint64_t new_cr3;
+	pr_ndckpt("merge_pgd_with_pmem\n");
+	new_cr3 = (CR3_ADDR_MASK & ndckpt_virt_to_phys(pgd_on_pmem)) |
+		  (CR3_PCID_MASK & __read_cr3()) | CR3_NOFLUSH;
+	pr_ndckpt("cr3(new)  = 0x%016llX\n", new_cr3);
+	mm->pgd = pgd_on_pmem;
+	write_cr3(new_cr3);
+	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
+}
+
+void pproc_restore(struct task_struct *task,
+		   struct PersistentProcessInfo *pproc)
+{
+	struct pt_regs *regs = task_pt_regs(task);
+	struct mm_struct *mm = task->mm;
+	struct vm_area_struct *vma = mm->mmap;
+	pr_ndckpt("restore from obj id = %016llX\n", task->ndckpt_id);
+	pproc_printk(pproc);
+	merge_pgd_with_pmem(task->mm, pproc->ctx[0].pgd);
+	pproc_print_regs(pproc, 0);
+	pproc_restore_regs(regs, pproc, 0);
+	while (vma) {
+		pr_ndckpt("vm_area_struct@0x%016llX\n", (uint64_t)vma);
+		pr_ndckpt("  vm_start = 0x%016llX\n", (uint64_t)vma->vm_start);
+		pr_ndckpt("  vm_end   = 0x%016llX\n", (uint64_t)vma->vm_end);
+		pr_ndckpt("  vm_flags   = 0x%016llX\n",
+			  (uint64_t)vma->vm_flags);
+		vma->vm_ckpt_flags = 0;
+		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
+			pr_ndckpt("  This is heap vma. Set VM_CKPT_TARGET.\n");
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+		}
+		if (vma->vm_start <= mm->start_stack &&
+		    mm->start_stack <= vma->vm_end) {
+			pr_ndckpt("  This is stack vma. Set VM_CKPT_TARGET.\n");
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+		}
+		if (vma->vm_start <= mm->start_code &&
+		    mm->start_code <= vma->vm_end) {
+			pr_ndckpt("  This is code vma. clear old mappings.\n");
+			pr_ndckpt_pgtable_range(mm->pgd, vma->vm_start,
+						vma->vm_end);
+			erase_mappings_to_dram(mm->pgd, vma->vm_start,
+					       vma->vm_end);
+		}
+		vma = vma->vm_next;
 	}
 }
