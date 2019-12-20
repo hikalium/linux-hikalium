@@ -3,9 +3,14 @@
 
 #include <asm/pgalloc.h>
 
+//#define NDCKPT_DEBUG
+#ifdef NDCKPT_DEBUG
 #define pr_ndckpt(fmt, ...)                                                    \
 	printk("ndckpt %10s@%10s:%3d]: " pr_fmt(fmt), __FUNCTION__, __FILE__,  \
 	       __LINE__, ##__VA_ARGS__)
+#else
+#define pr_ndckpt(fmt, ...)
+#endif
 
 //#define NDCKPT_DEBUG_PGSTRUCT_ALLOC
 #ifdef NDCKPT_DEBUG_PGSTRUCT_ALLOC
