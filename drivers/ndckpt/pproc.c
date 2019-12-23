@@ -419,7 +419,6 @@ void pproc_restore(struct task_struct *task,
 	BUG_ON(valid_ctx_idx < 0 || 2 <= valid_ctx_idx);
 	pr_ndckpt("  valid_ctx_idx: %d\n", valid_ctx_idx);
 	pproc_print_regs(pproc, valid_ctx_idx);
-	switch_mm_context(task->mm, pproc->ctx[valid_ctx_idx].pgd);
 	pproc_restore_regs(regs, pproc, valid_ctx_idx);
 	while (vma) {
 		pr_ndckpt("vm_area_struct@0x%016llX\n", (uint64_t)vma);
@@ -440,13 +439,14 @@ void pproc_restore(struct task_struct *task,
 		if (vma->vm_start <= mm->start_code &&
 		    mm->start_code <= vma->vm_end) {
 			pr_ndckpt("  This is code vma. clear old mappings.\n");
-			pr_ndckpt_pgtable_range(mm->pgd, vma->vm_start,
-						vma->vm_end);
-			erase_mappings_to_dram(mm->pgd, vma->vm_start,
+			erase_mappings_to_dram(pproc->ctx[0].pgd, vma->vm_start,
+					       vma->vm_end);
+			erase_mappings_to_dram(pproc->ctx[1].pgd, vma->vm_start,
 					       vma->vm_end);
 		}
 		vma = vma->vm_next;
 	}
+	switch_mm_context(task->mm, pproc->ctx[valid_ctx_idx].pgd);
 	sync_target_vmas(mm, pproc->ctx[1 - valid_ctx_idx].pgd);
 	pproc_set_regs(pproc, 1 - valid_ctx_idx, regs);
 	pproc_set_valid_ctx(pproc, 1 - valid_ctx_idx);
