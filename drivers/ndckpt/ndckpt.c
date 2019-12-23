@@ -77,6 +77,12 @@ int ndckpt_is_virt_addr_in_nvdimm(void *vaddr)
 }
 EXPORT_SYMBOL(ndckpt_is_virt_addr_in_nvdimm);
 
+void memcpy_and_clwb(void *dst, void *src, size_t size)
+{
+	memcpy(dst, src, size);
+	ndckpt_clwb_range(dst, size);
+}
+
 static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 {
 	// Also replaces page table structures
@@ -113,7 +119,7 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 				new_page_vaddr = ndckpt_alloc_zeroed_page();
 				new_page_paddr =
 					ndckpt_virt_to_phys(new_page_vaddr);
-				memcpy(new_page_vaddr, t3, PAGE_SIZE);
+				memcpy_and_clwb(new_page_vaddr, t3, PAGE_SIZE);
 				e4->pgd = (e4->pgd & ~PTE_PFN_MASK) |
 					  new_page_paddr;
 				i4 = -1;
@@ -134,7 +140,7 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 				new_page_vaddr = ndckpt_alloc_zeroed_page();
 				new_page_paddr =
 					ndckpt_virt_to_phys(new_page_vaddr);
-				memcpy(new_page_vaddr, t2, PAGE_SIZE);
+				memcpy_and_clwb(new_page_vaddr, t2, PAGE_SIZE);
 				e3->pud = (e3->pud & ~PTE_PFN_MASK) |
 					  new_page_paddr;
 				i3 = -1;
@@ -155,7 +161,7 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 				new_page_vaddr = ndckpt_alloc_zeroed_page();
 				new_page_paddr =
 					ndckpt_virt_to_phys(new_page_vaddr);
-				memcpy(new_page_vaddr, t1, PAGE_SIZE);
+				memcpy_and_clwb(new_page_vaddr, t1, PAGE_SIZE);
 				e2->pmd = (e2->pmd & ~PTE_PFN_MASK) |
 					  new_page_paddr;
 				i2 = -1;
@@ -176,7 +182,8 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 		if (!ndckpt_is_phys_addr_in_nvdimm(page_paddr)) {
 			new_page_vaddr = ndckpt_alloc_zeroed_page();
 			new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
-			memcpy(new_page_vaddr, __va(page_paddr), PAGE_SIZE);
+			memcpy_and_clwb(new_page_vaddr, __va(page_paddr),
+					PAGE_SIZE);
 			e1->pte = (e1->pte & ~PTE_PFN_MASK) | new_page_paddr;
 			ndckpt_invlpg((void *)addr);
 			pr_ndckpt("replaced\n");
