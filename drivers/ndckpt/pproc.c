@@ -120,18 +120,6 @@ void pproc_restore_regs(struct pt_regs *regs,
 	regs->flags = ctx->regs[PCTX_REG_IDX_RFLAGS];
 }
 
-static void
-pproc_copy_regs_from_valid_to_running(struct PersistentProcessInfo *proc)
-{
-	// NO FLUSH
-	struct PersistentExecutionContext *src_ctx =
-		&proc->ctx[proc->valid_ctx_idx];
-	struct PersistentExecutionContext *dst_ctx =
-		&proc->ctx[1 - proc->valid_ctx_idx];
-	BUG_ON(proc->valid_ctx_idx < 0 || 2 <= proc->valid_ctx_idx);
-	memcpy(dst_ctx, src_ctx, sizeof(*dst_ctx));
-}
-
 static const char *pctx_reg_names[PCTX_REGS] = {
 	"RAX", "RCX", "RDX", "RBX", "RSP", "RBP", "RSI", "RDI", "R8",
 	"R9",  "R10", "R11", "R12", "R13", "R14", "R15", "RIP", "RFLAGS",
@@ -415,7 +403,8 @@ void pproc_commit(struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 	pr_ndckpt("Sync Ctx #%d -> Ctx #%d\n", prev_running_ctx_idx,
 		  next_running_ctx_idx);
 	sync_target_vmas(mm, pproc->ctx[next_running_ctx_idx].pgd);
-	pproc_copy_regs_from_valid_to_running(pproc);
+	// Finally, switch the cr3 to the new running context's pgd.
+	switch_mm_context(mm, pproc->ctx[next_running_ctx_idx].pgd);
 }
 
 void pproc_restore(struct task_struct *task,
@@ -458,4 +447,7 @@ void pproc_restore(struct task_struct *task,
 		}
 		vma = vma->vm_next;
 	}
+	sync_target_vmas(mm, pproc->ctx[1 - valid_ctx_idx].pgd);
+	pproc_set_regs(pproc, 1 - valid_ctx_idx, regs);
+	pproc_set_valid_ctx(pproc, 1 - valid_ctx_idx);
 }
