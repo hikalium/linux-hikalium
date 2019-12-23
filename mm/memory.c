@@ -499,17 +499,13 @@ int __pte_alloc(struct mm_struct *mm, pmd_t *pmd)
 	if (likely(pmd_none(*pmd))) {	/* Has another populated it ? */
 		mm_inc_nr_ptes(mm);
 #ifdef CONFIG_NDCKPT
-    // Alloc PT (4th page table structure)
-    if(ndckpt_is_enabled_on_current()) {
-      ndckpt_pmd_populate(mm, pmd, (pte_t*)ndckpt_alloc_zeroed_page());
-    } else{
-      ndckpt_pmd_populate(mm, pmd, page_to_virt(new));
-      new = NULL;
-    }
+    // NVDIMM pages are not allocated here.
+    // See do_anonymous_page() and ndckpt_pte_alloc()
+    ndckpt_pmd_populate(mm, pmd, page_to_virt(new));
 #else
 		pmd_populate(mm, pmd, new);
-		new = NULL;
 #endif
+		new = NULL;
 	}
 #ifdef CONFIG_NDCKPT
   if (ptl) {
