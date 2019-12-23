@@ -29,6 +29,16 @@
 // struct vm_area_struct -> vm_ckpt_flags
 #define VM_CKPT_TARGET 0x0001
 
+/*
+	struct vm_fault vmf = {
+		.vma = vma,
+		.address = address & PAGE_MASK,
+		.flags = flags,
+		.pgoff = linear_page_index(vma, address),
+		.gfp_mask = __get_fault_gfp_mask(vma),
+	};
+*/
+
 struct pmem_device;
 
 void ndckpt_notify_pmem(struct pmem_device *pmem);
@@ -151,6 +161,16 @@ static inline pmd_t *ndckpt_pmd_alloc(struct mm_struct *mm, pud_t *pud,
 		ndckpt___pmd_alloc(mm, pud, address, vma)) ?
 		       NULL :
 		       ndckpt_pmd_offset(pud, address);
+}
+
+int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
+		       struct vm_area_struct *vma);
+
+static inline int ndckpt_pte_alloc(struct mm_struct *mm, pmd_t *pmd,
+				   struct vm_area_struct *vma)
+{
+	// cf. pte_alloc @ include/linux/mm.h
+	return (unlikely(pmd_none(*pmd)) && ndckpt___pte_alloc(mm, pmd, vma));
 }
 
 static inline void ndckpt_pmd_populate(struct mm_struct *mm, pmd_t *pmd,

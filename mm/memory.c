@@ -3021,8 +3021,13 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	 *
 	 * Here we only have down_read(mmap_sem).
 	 */
+#ifdef CONFIG_NDCKPT
+	if (ndckpt_pte_alloc(vma->vm_mm, vmf->pmd, vmf->vma))
+		return VM_FAULT_OOM;
+#else
 	if (pte_alloc(vma->vm_mm, vmf->pmd))
 		return VM_FAULT_OOM;
+#endif
 
 	/* See the comment in pte_alloc_one_map() */
 	if (unlikely(pmd_trans_unstable(vmf->pmd)))

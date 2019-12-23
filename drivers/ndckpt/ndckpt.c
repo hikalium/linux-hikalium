@@ -336,6 +336,24 @@ void ndckpt__pte_alloc(struct vm_fault *vmf)
 }
 EXPORT_SYMBOL(ndckpt__pte_alloc);
 
+int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
+		       struct vm_area_struct *vma)
+{
+	// Alloc PT (4th page table structure)
+	if (!is_vma_ndckpt_target(vma)) {
+		// Alloc on DRAM
+		return __pte_alloc(mm, pmd);
+	}
+	smp_wmb(); /* Could be smp_wmb__xxx(before|after)_spin_lock */
+	if (likely(pmd_none(*pmd))) { /* Has another populated it ? */
+		mm_inc_nr_ptes(mm);
+		ndckpt_pmd_populate(mm, pmd,
+				    (pte_t *)ndckpt_alloc_zeroed_page());
+	}
+	return 0;
+}
+EXPORT_SYMBOL(ndckpt___pte_alloc);
+
 static int __init ndckpt_module_init(void)
 {
 	BUILD_BUG_ON((sizeof(struct PersistentObjectHeader) > kCacheLineSize));
