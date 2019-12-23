@@ -326,7 +326,8 @@ static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
 	pte_t *e1;
 	void *page_vaddr;
 	uint64_t page_paddr;
-	pr_ndckpt("flush_dirty_pages: [0x%016llX, 0x%016llX)\n", start, end);
+	pr_ndckpt_flush("flush_dirty_pages: [0x%016llX, 0x%016llX)\n", start,
+			end);
 	for (addr = start; addr < end;) {
 		traverse_pml4e(addr, t4, &e4, &t3);
 		if (!t3) {
@@ -350,19 +351,19 @@ static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
 		}
 		page_paddr = ndckpt_v2p(page_vaddr);
 		page_vaddr = ndckpt_p2v(page_paddr);
-		pr_ndckpt("    PAGE @ 0x%016llX v->p 0x%016llX\n", addr,
-			  page_paddr);
+		pr_ndckpt_flush("    PAGE @ 0x%016llX v->p 0x%016llX\n", addr,
+				page_paddr);
 		if (e1->pte & _PAGE_DIRTY) {
 			ndckpt_clwb_range(page_vaddr, PAGE_SIZE);
 			e1->pte &= ~(uint64_t)_PAGE_DIRTY;
-			pr_ndckpt(
+			pr_ndckpt_flush(
 				"flushed dirty page @ 0x%016llX v->p 0x%016llX\n",
 				addr, page_paddr);
 		}
 		addr += PAGE_SIZE;
 	}
 	ndckpt_sfence();
-	pr_ndckpt("SFENCE() done\n");
+	pr_ndckpt_flush("SFENCE() done\n");
 }
 
 static void flush_target_vmas(struct mm_struct *mm)

@@ -12,6 +12,20 @@
 #define pr_ndckpt(fmt, ...)
 #endif
 
+//#define NDCKPT_DEBUG_FLUSH
+#ifdef NDCKPT_DEBUG_FLUSH
+#define pr_ndckpt_flush(fmt, ...) pr_ndckpt(fmt, ##__VA_ARGS__)
+#else
+#define pr_ndckpt_flush(fmt, ...)
+#endif
+
+//#define NDCKPT_DEBUG_PGTABLE
+#ifdef NDCKPT_DEBUG_PGTABLE
+#define pr_ndckpt_pgtable(fmt, ...) pr_ndckpt(fmt, ##__VA_ARGS__)
+#else
+#define pr_ndckpt_pgtable(fmt, ...)
+#endif
+
 //#define NDCKPT_DEBUG_PGSTRUCT_ALLOC
 #ifdef NDCKPT_DEBUG_PGSTRUCT_ALLOC
 #define pr_ndckpt_pgalloc(fmt, ...) pr_ndckpt(fmt, ##__VA_ARGS__)
