@@ -294,12 +294,13 @@ int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
 }
 EXPORT_SYMBOL(ndckpt___pud_alloc);
 
-int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
+int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address,
+		       struct vm_area_struct *vma)
 {
 	// Alloc PD (3rd page table structure)
 	pmd_t *new;
 	uint64_t phys;
-	if (!ndckpt_is_enabled_on_current()) {
+	if (!is_vma_ndckpt_target(vma)) {
 		// Alloc on DRAM
 		return __pmd_alloc(mm, pud, address);
 	}

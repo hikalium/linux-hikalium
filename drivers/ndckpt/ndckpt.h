@@ -139,14 +139,16 @@ static inline pud_t *ndckpt_pud_alloc(struct mm_struct *mm, p4d_t *p4d,
 		       ndckpt_pud_offset(p4d, address);
 }
 
-int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address);
+int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address,
+		       struct vm_area_struct *vma);
 
 static inline pmd_t *ndckpt_pmd_alloc(struct mm_struct *mm, pud_t *pud,
-				      unsigned long address)
+				      unsigned long address,
+				      struct vm_area_struct *vma)
 {
 	// Alloc page for pud if not existed, and return addr to entry for the address
 	return (unlikely(pud_none(*pud)) &&
-		ndckpt___pmd_alloc(mm, pud, address)) ?
+		ndckpt___pmd_alloc(mm, pud, address, vma)) ?
 		       NULL :
 		       ndckpt_pmd_offset(pud, address);
 }

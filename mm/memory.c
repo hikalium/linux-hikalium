@@ -4091,7 +4091,7 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 	}
 
 #ifdef CONFIG_NDCKPT
-	vmf.pmd = ndckpt_pmd_alloc(mm, vmf.pud, address);
+	vmf.pmd = ndckpt_pmd_alloc(mm, vmf.pud, address, vma);
 #else
 	vmf.pmd = pmd_alloc(mm, vmf.pud, address);
 #endif
