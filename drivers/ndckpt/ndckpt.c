@@ -77,22 +77,9 @@ int ndckpt_is_virt_addr_in_nvdimm(void *vaddr)
 }
 EXPORT_SYMBOL(ndckpt_is_virt_addr_in_nvdimm);
 
-void memcpy_and_clwb(void *dst, void *src, size_t size)
-{
-	memcpy(dst, src, size);
-	ndckpt_clwb_range(dst, size);
-}
-
 static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 {
 	// Also replaces page table structures
-	/*
-  Intel / Linux
-  PML4: pgd_t[512];
-  PDPT: pud_t[512];
-  PD  : pmd_t[512];
-  PT  : pte_t[512];
-  */
 	uint64_t addr;
 	pgd_t *e4;
 	pud_t *t3 = NULL;
@@ -102,8 +89,6 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 	pte_t *t1 = NULL;
 	pte_t *e1;
 	uint64_t page_paddr;
-	void *new_page_vaddr;
-	uint64_t new_page_paddr;
 	int i1 = -1, i2 = -1, i3 = -1, i4 = -1;
 	for (addr = start; addr < end;) {
 		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
@@ -116,14 +101,9 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 			}
 			t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
 			if (!ndckpt_is_virt_addr_in_nvdimm(t3)) {
-				new_page_vaddr = ndckpt_alloc_zeroed_page();
-				new_page_paddr =
-					ndckpt_virt_to_phys(new_page_vaddr);
-				memcpy_and_clwb(new_page_vaddr, t3, PAGE_SIZE);
-				e4->pgd = (e4->pgd & ~PTE_PFN_MASK) |
-					  new_page_paddr;
+				replace_pdpt_with_nvdimm_page(e4);
+				ndckpt_invlpg((void *)addr);
 				i4 = -1;
-				pr_ndckpt("replaced\n");
 				continue;
 			}
 		}
@@ -137,14 +117,9 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 			}
 			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
 			if (!ndckpt_is_virt_addr_in_nvdimm(t2)) {
-				new_page_vaddr = ndckpt_alloc_zeroed_page();
-				new_page_paddr =
-					ndckpt_virt_to_phys(new_page_vaddr);
-				memcpy_and_clwb(new_page_vaddr, t2, PAGE_SIZE);
-				e3->pud = (e3->pud & ~PTE_PFN_MASK) |
-					  new_page_paddr;
+				replace_pd_with_nvdimm_page(e3);
+				ndckpt_invlpg((void *)addr);
 				i3 = -1;
-				pr_ndckpt("replaced\n");
 				continue;
 			}
 		}
@@ -158,14 +133,9 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 			}
 			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
 			if (!ndckpt_is_virt_addr_in_nvdimm(t1)) {
-				new_page_vaddr = ndckpt_alloc_zeroed_page();
-				new_page_paddr =
-					ndckpt_virt_to_phys(new_page_vaddr);
-				memcpy_and_clwb(new_page_vaddr, t1, PAGE_SIZE);
-				e2->pmd = (e2->pmd & ~PTE_PFN_MASK) |
-					  new_page_paddr;
+				replace_pt_with_nvdimm_page(e2);
+				ndckpt_invlpg((void *)addr);
 				i2 = -1;
-				pr_ndckpt("replaced\n");
 				continue;
 			}
 		}
@@ -180,13 +150,8 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 		pr_ndckpt("    PAGE @ 0x%016llX v->p 0x%016llX\n", addr,
 			  page_paddr);
 		if (!ndckpt_is_phys_addr_in_nvdimm(page_paddr)) {
-			new_page_vaddr = ndckpt_alloc_zeroed_page();
-			new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
-			memcpy_and_clwb(new_page_vaddr, __va(page_paddr),
-					PAGE_SIZE);
-			e1->pte = (e1->pte & ~PTE_PFN_MASK) | new_page_paddr;
+			replace_page_with_nvdimm_page(e1);
 			ndckpt_invlpg((void *)addr);
-			pr_ndckpt("replaced\n");
 			continue;
 		}
 		addr += PAGE_SIZE;

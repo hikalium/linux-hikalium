@@ -88,6 +88,13 @@ static inline unsigned long ndckpt_pmd_page_vaddr(pmd_t pmd)
 		return (unsigned long)__va(paddr);
 	return (unsigned long long)ndckpt_phys_to_virt(paddr);
 }
+static inline unsigned long ndckpt_page_page_vaddr(pte_t pte)
+{
+	uint64_t paddr = pte_val(pte) & PTE_PFN_MASK;
+	if (!ndckpt_is_phys_addr_in_nvdimm(paddr))
+		return (unsigned long)__va(paddr);
+	return (unsigned long long)ndckpt_phys_to_virt(paddr);
+}
 
 static inline unsigned long ndckpt_p4d_to_pdpt_paddr(p4d_t e)
 {

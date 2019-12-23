@@ -40,6 +40,12 @@ static inline void ndckpt_clwb_range(volatile void *p, size_t byte_size)
 	}
 }
 
+static inline void memcpy_and_clwb(void *dst, void *src, size_t size)
+{
+	memcpy(dst, src, size);
+	ndckpt_clwb_range(dst, size);
+}
+
 static inline void ndckpt_sfence(void)
 {
 	asm volatile("sfence");
@@ -92,10 +98,53 @@ extern struct kobject *kobj_ndckpt;
 extern struct pmem_device *first_pmem_device;
 
 // @pgtable.c
+/*
+  Intel / Linux
+  PML4: pgd_t[512];
+  PDPT: pud_t[512];
+  PD  : pmd_t[512];
+  PT  : pte_t[512];
+*/
 #define PADDR_TO_IDX_IN_PML4(paddr) ((paddr >> (12 + 9 * 3)) & 0x1FF)
 #define PADDR_TO_IDX_IN_PDPT(paddr) ((paddr >> (12 + 9 * 2)) & 0x1FF)
 #define PADDR_TO_IDX_IN_PD(paddr) ((paddr >> (12 + 9 * 1)) & 0x1FF)
 #define PADDR_TO_IDX_IN_PT(paddr) ((paddr >> (12 + 9 * 0)) & 0x1FF)
+
+static inline void replace_pdpt_with_nvdimm_page(pgd_t *ent_of_page)
+{
+	void *old_page_vaddr = (void *)ndckpt_pgd_page_vaddr(*ent_of_page);
+	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
+	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
+	ent_of_page->pgd = (ent_of_page->pgd & ~PTE_PFN_MASK) | new_page_paddr;
+}
+
+static inline void replace_pd_with_nvdimm_page(pud_t *ent_of_page)
+{
+	void *old_page_vaddr = (void *)ndckpt_pud_page_vaddr(*ent_of_page);
+	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
+	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
+	ent_of_page->pud = (ent_of_page->pud & ~PTE_PFN_MASK) | new_page_paddr;
+}
+
+static inline void replace_pt_with_nvdimm_page(pmd_t *ent_of_page)
+{
+	void *old_page_vaddr = (void *)ndckpt_pmd_page_vaddr(*ent_of_page);
+	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
+	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
+	ent_of_page->pmd = (ent_of_page->pmd & ~PTE_PFN_MASK) | new_page_paddr;
+}
+
+static inline void replace_page_with_nvdimm_page(pte_t *ent_of_page)
+{
+	void *old_page_vaddr = (void *)ndckpt_page_page_vaddr(*ent_of_page);
+	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
+	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
+	ent_of_page->pte = (ent_of_page->pte & ~PTE_PFN_MASK) | new_page_paddr;
+}
 
 void ndckpt_print_pml4(pgd_t *pgd);
 void erase_mappings_to_dram(pgd_t *t4, uint64_t start, uint64_t end);
