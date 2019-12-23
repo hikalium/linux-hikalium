@@ -4061,7 +4061,7 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 		return VM_FAULT_OOM;
 
 #ifdef CONFIG_NDCKPT
-	vmf.pud = ndckpt_pud_alloc(mm, p4d, address);
+	vmf.pud = ndckpt_pud_alloc(mm, p4d, address, vma);
 #else
 	vmf.pud = pud_alloc(mm, p4d, address);
 #endif

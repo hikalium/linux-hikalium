@@ -267,12 +267,13 @@ int ndckpt_handle_checkpoint(void)
 }
 EXPORT_SYMBOL(ndckpt_handle_checkpoint);
 
-int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address)
+int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
+		       struct vm_area_struct *vma)
 {
 	// Alloc PDPT (2nd page table structure)
 	pud_t *new;
 	uint64_t pud_phys;
-	if (!ndckpt_is_enabled_on_current()) {
+	if (!is_vma_ndckpt_target(vma)) {
 		// Alloc on DRAM
 		return __pud_alloc(mm, p4d, address);
 	}

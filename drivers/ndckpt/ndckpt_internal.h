@@ -74,6 +74,12 @@ static inline void switch_mm_context(struct mm_struct *mm, pgd_t *new_pgd)
 	write_cr3(new_cr3);
 }
 
+static inline bool is_vma_ndckpt_target(struct vm_area_struct *vma)
+{
+	BUG_ON(!vma);
+	return vma->vm_ckpt_flags & VM_CKPT_TARGET;
+}
+
 #define POBJ_SIGNATURE 0x4F50534F6D75696CULL
 struct PersistentObjectHeader {
 	// This struct is placed at the end of the page,

@@ -126,13 +126,15 @@ static inline int ndckpt_is_pmd_points_nvdimm_page(pmd_t e)
 	return ndckpt_is_phys_addr_in_nvdimm(ndckpt_pmd_to_pdpt_paddr(e));
 }
 
-int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address);
+int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
+		       struct vm_area_struct *vma);
 
 static inline pud_t *ndckpt_pud_alloc(struct mm_struct *mm, p4d_t *p4d,
-				      unsigned long address)
+				      unsigned long address,
+				      struct vm_area_struct *vma)
 {
 	return (unlikely(p4d_none(*p4d)) &&
-		ndckpt___pud_alloc(mm, p4d, address)) ?
+		ndckpt___pud_alloc(mm, p4d, address, vma)) ?
 		       NULL :
 		       ndckpt_pud_offset(p4d, address);
 }
