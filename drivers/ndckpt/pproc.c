@@ -55,7 +55,6 @@ void pproc_set_valid_ctx(struct PersistentProcessInfo *pproc, int ctx_idx)
 	pproc->valid_ctx_idx = ctx_idx;
 	ndckpt_clwb(&pproc->valid_ctx_idx);
 	ndckpt_sfence();
-	pr_ndckpt("Ctx #%d is marked as valid\n", ctx_idx);
 }
 
 int pproc_get_running_ctx(struct PersistentProcessInfo *pproc)
@@ -131,9 +130,10 @@ void pproc_print_regs(struct PersistentProcessInfo *proc, int ctx_idx)
 	int i;
 	BUG_ON(ctx_idx < 0 || 2 <= ctx_idx);
 	ctx = &proc->ctx[ctx_idx];
-	printk("regs in ctx[%d]\n", ctx_idx);
+	pr_ndckpt("regs in ctx[%d]\n", ctx_idx);
 	for (i = 0; i < PCTX_REGS; i++) {
-		printk("  %6s: 0x%016llX\n", pctx_reg_names[i], ctx->regs[i]);
+		pr_ndckpt("  %6s: 0x%016llX\n", pctx_reg_names[i],
+			  ctx->regs[i]);
 	}
 }
 
@@ -141,12 +141,12 @@ void pproc_printk(struct PersistentProcessInfo *pproc)
 {
 	int i;
 	if (!pproc_is_valid(pproc)) {
-		printk("invalid last_proc_info\n");
+		pr_ndckpt("invalid last_proc_info\n");
 		return;
 	}
-	printk("PersistentProcessInfo at pobj #%lld:\n",
-	       pobj_get_header(pproc)->id);
-	printk("  Ctx #%d is valid\n", pproc->valid_ctx_idx);
+	pr_ndckpt("PersistentProcessInfo at pobj #%lld:\n",
+		  pobj_get_header(pproc)->id);
+	pr_ndckpt("  Ctx #%d is valid\n", pproc->valid_ctx_idx);
 	for (i = 0; i < 2; i++) {
 		pr_ndckpt("Ctx #%d:\n", i);
 		ndckpt_print_pml4(pproc->ctx[i].pgd);
@@ -235,7 +235,6 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 	void *dst_page_vaddr;
 	//
 	void *tmp_page_addr;
-	pr_ndckpt("sync_pages: [0x%016llX, 0x%016llX)\n", start, end);
 	for (addr = start; addr < end;) {
 		traverse_pml4e(addr, src_t4, &src_e4, &src_t3);
 		traverse_pml4e(addr, dst_t4, &dst_e4, &dst_t3);
@@ -244,8 +243,7 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 			continue;
 		}
 		if (!dst_t3 || !ndckpt_is_virt_addr_in_nvdimm(dst_t3)) {
-			pr_ndckpt("Alloc PDPT for 0x%016llX on NVDIMM.\n",
-				  addr);
+			// Alloc
 			tmp_page_addr = ndckpt_alloc_zeroed_page();
 			if (dst_t3) {
 				memcpy(tmp_page_addr, dst_t3, PAGE_SIZE);
@@ -262,7 +260,7 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 			continue;
 		}
 		if (!dst_t2 || !ndckpt_is_virt_addr_in_nvdimm(dst_t2)) {
-			pr_ndckpt("Alloc PD for 0x%016llX on NVDIMM.\n", addr);
+			// Alloc
 			tmp_page_addr = ndckpt_alloc_zeroed_page();
 			if (dst_t2) {
 				memcpy(tmp_page_addr, dst_t2, PAGE_SIZE);
@@ -278,7 +276,7 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 			continue;
 		}
 		if (!dst_t1 || !ndckpt_is_virt_addr_in_nvdimm(dst_t1)) {
-			pr_ndckpt("Alloc PT for 0x%016llX on NVDIMM.\n", addr);
+			// Alloc
 			tmp_page_addr = ndckpt_alloc_zeroed_page();
 			if (dst_t1) {
 				memcpy(tmp_page_addr, dst_t1, PAGE_SIZE);
@@ -295,8 +293,7 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 		}
 		if (!dst_page_vaddr ||
 		    !ndckpt_is_virt_addr_in_nvdimm(dst_page_vaddr)) {
-			pr_ndckpt("Alloc PAGE for 0x%016llX on NVDIMM.\n",
-				  addr);
+			// Alloc
 			tmp_page_addr = ndckpt_alloc_zeroed_page();
 			if (dst_page_vaddr) {
 				memcpy(tmp_page_addr, dst_page_vaddr,
@@ -394,15 +391,13 @@ void pproc_commit(struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 	const int prev_running_ctx_idx = pproc_get_running_ctx(pproc);
 	const int next_running_ctx_idx = 1 - prev_running_ctx_idx;
 	pproc_set_regs(pproc, prev_running_ctx_idx, regs);
-	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
 	flush_target_vmas(mm);
-	ndckpt_print_pml4(ndckpt_phys_to_virt(__read_cr3() & CR3_ADDR_MASK));
-	pr_ndckpt("Ctx #%d has been committed\n", prev_running_ctx_idx);
+	pr_ndckpt_ckpt("Ctx #%d has been committed\n", prev_running_ctx_idx);
 	// At this point, running ctx has become clean so both context is valid.
 	pproc_set_valid_ctx(pproc, prev_running_ctx_idx);
 	// prepare next running context
-	pr_ndckpt("Sync Ctx #%d -> Ctx #%d\n", prev_running_ctx_idx,
-		  next_running_ctx_idx);
+	pr_ndckpt_ckpt("Sync Ctx #%d -> Ctx #%d\n", prev_running_ctx_idx,
+		       next_running_ctx_idx);
 	sync_target_vmas(mm, pproc->ctx[next_running_ctx_idx].pgd);
 	// Finally, switch the cr3 to the new running context's pgd.
 	switch_mm_context(mm, pproc->ctx[next_running_ctx_idx].pgd);
@@ -415,31 +410,33 @@ void pproc_restore(struct task_struct *task,
 	struct mm_struct *mm = task->mm;
 	struct vm_area_struct *vma = mm->mmap;
 	const int valid_ctx_idx = pproc->valid_ctx_idx;
-	pr_ndckpt("restore from obj id = %016llX\n", task->ndckpt_id);
+	pr_ndckpt_restore("restore from obj id = %016llX\n", task->ndckpt_id);
 	pproc_printk(pproc);
 	BUG_ON(valid_ctx_idx < 0 || 2 <= valid_ctx_idx);
-	pr_ndckpt("  valid_ctx_idx: %d\n", valid_ctx_idx);
+	pr_ndckpt_restore("  valid_ctx_idx: %d\n", valid_ctx_idx);
 	pproc_print_regs(pproc, valid_ctx_idx);
 	pproc_restore_regs(regs, pproc, valid_ctx_idx);
 	while (vma) {
-		pr_ndckpt("vm_area_struct@0x%016llX\n", (uint64_t)vma);
-		pr_ndckpt("  vm_start = 0x%016llX\n", (uint64_t)vma->vm_start);
-		pr_ndckpt("  vm_end   = 0x%016llX\n", (uint64_t)vma->vm_end);
-		pr_ndckpt("  vm_flags   = 0x%016llX\n",
-			  (uint64_t)vma->vm_flags);
+		pr_ndckpt_restore(
+			"vma@0x%016llX [0x%016llX - 0x%016llX] 0x%016llX\n",
+			(uint64_t)vma, (uint64_t)vma->vm_start,
+			(uint64_t)vma->vm_end, (uint64_t)vma->vm_flags);
 		vma->vm_ckpt_flags = 0;
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
-			pr_ndckpt("  This is heap vma. Set VM_CKPT_TARGET.\n");
+			pr_ndckpt_restore(
+				"  This is heap vma. Set VM_CKPT_TARGET.\n");
 			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 		}
 		if (vma->vm_start <= mm->start_stack &&
 		    mm->start_stack <= vma->vm_end) {
-			pr_ndckpt("  This is stack vma. Set VM_CKPT_TARGET.\n");
+			pr_ndckpt_restore(
+				"  This is stack vma. Set VM_CKPT_TARGET.\n");
 			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 		}
 		if (vma->vm_start <= mm->start_code &&
 		    mm->start_code <= vma->vm_end) {
-			pr_ndckpt("  This is code vma. clear old mappings.\n");
+			pr_ndckpt_restore(
+				"  This is code vma. clear old mappings.\n");
 			erase_mappings_to_dram(pproc->ctx[0].pgd, vma->vm_start,
 					       vma->vm_end);
 			erase_mappings_to_dram(pproc->ctx[1].pgd, vma->vm_start,

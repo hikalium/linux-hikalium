@@ -69,7 +69,6 @@ static inline void switch_mm_context(struct mm_struct *mm, pgd_t *new_pgd)
 	// but it does not work for now.
 	uint64_t new_cr3 = (CR3_ADDR_MASK & ndckpt_virt_to_phys(new_pgd)) |
 			   (CR3_PCID_MASK & __read_cr3()) /* | CR3_NOFLUSH */;
-	pr_ndckpt("cr3(new)  = 0x%016llX\n", new_cr3);
 	mm->pgd = new_pgd;
 	write_cr3(new_cr3);
 }

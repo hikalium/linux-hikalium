@@ -93,7 +93,6 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 	for (addr = start; addr < end;) {
 		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
 			i4 = PADDR_TO_IDX_IN_PML4(addr);
-			pr_ndckpt("PML4[0x%03X]\n", i4);
 			e4 = &t4[i4];
 			if ((e4->pgd & _PAGE_PRESENT) == 0) {
 				addr += PGDIR_SIZE;
@@ -109,7 +108,6 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 		}
 		if (i3 != PADDR_TO_IDX_IN_PDPT(addr)) {
 			i3 = PADDR_TO_IDX_IN_PDPT(addr);
-			pr_ndckpt(" PDPT[0x%03X]\n", i3);
 			e3 = &t3[i3];
 			if ((e3->pud & _PAGE_PRESENT) == 0) {
 				addr += PUD_SIZE;
@@ -125,7 +123,6 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 		}
 		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
 			i2 = PADDR_TO_IDX_IN_PD(addr);
-			pr_ndckpt("  PD  [0x%03X]\n", i2);
 			e2 = &t2[i2];
 			if ((e2->pmd & _PAGE_PRESENT) == 0) {
 				addr += PMD_SIZE;
@@ -140,15 +137,12 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 			}
 		}
 		i1 = PADDR_TO_IDX_IN_PT(addr);
-		pr_ndckpt("   PT  [0x%03X]\n", i1);
 		e1 = &t1[i1];
 		if ((e1->pte & _PAGE_PRESENT) == 0) {
 			addr += PAGE_SIZE;
 			continue;
 		}
 		page_paddr = e1->pte & PTE_PFN_MASK;
-		pr_ndckpt("    PAGE @ 0x%016llX v->p 0x%016llX\n", addr,
-			  page_paddr);
 		if (!ndckpt_is_phys_addr_in_nvdimm(page_paddr)) {
 			replace_page_with_nvdimm_page(e1);
 			ndckpt_invlpg((void *)addr);
@@ -190,22 +184,16 @@ static void init_pproc(struct PersistentMemoryManager *pman,
 	memcpy(pgd_ctx0, mm->pgd, PAGE_SIZE);
 	pproc_set_pgd(pproc, 0, pgd_ctx0);
 	pproc_set_regs(pproc, 0, regs);
-	pproc_print_regs(pproc, 0);
 	// ctx 1
 	pgd_ctx1 = ndckpt_alloc_zeroed_page();
 	memcpy(pgd_ctx1, mm->pgd, PAGE_SIZE);
 	pproc_set_pgd(pproc, 1, pgd_ctx1);
 	pproc_set_regs(pproc, 1, regs);
-	pproc_print_regs(pproc, 1);
 	// Set vma flags and replace stack pages with NVDIMM
 	while (vma) {
-		pr_ndckpt("vm_area_struct@0x%016llX\n", (uint64_t)vma);
-		pr_ndckpt("  vm_start = 0x%016llX\n", (uint64_t)vma->vm_start);
-		pr_ndckpt("  vm_end   = 0x%016llX\n", (uint64_t)vma->vm_end);
-		pr_ndckpt("  vm_next   = 0x%016llX\n", (uint64_t)vma->vm_next);
-		pr_ndckpt("  vm_prev   = 0x%016llX\n", (uint64_t)vma->vm_prev);
-		pr_ndckpt("  vm_flags   = 0x%016llX\n",
-			  (uint64_t)vma->vm_flags);
+		pr_ndckpt("vma@0x%016llX [0x%016llX - 0x%016llX] 0x%016llX\n",
+			  (uint64_t)vma, (uint64_t)vma->vm_start,
+			  (uint64_t)vma->vm_end, (uint64_t)vma->vm_flags);
 		vma->vm_ckpt_flags = 0;
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
 			pr_ndckpt("  This is heap vma. Set VM_CKPT_TARGET.\n");

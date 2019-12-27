@@ -3,13 +3,27 @@
 
 #include <asm/pgalloc.h>
 
-//#define NDCKPT_DEBUG
+#define NDCKPT_DEBUG
 #ifdef NDCKPT_DEBUG
 #define pr_ndckpt(fmt, ...)                                                    \
 	printk("ndckpt %10s@%10s:%3d]: " pr_fmt(fmt), __FUNCTION__, __FILE__,  \
 	       __LINE__, ##__VA_ARGS__)
 #else
 #define pr_ndckpt(fmt, ...)
+#endif
+
+#define NDCKPT_DEBUG_RESTORE
+#ifdef NDCKPT_DEBUG_RESTORE
+#define pr_ndckpt_restore(fmt, ...) pr_ndckpt(fmt, ##__VA_ARGS__)
+#else
+#define pr_ndckpt_restore(fmt, ...)
+#endif
+
+//#define NDCKPT_DEBUG_CHECKPOINT
+#ifdef NDCKPT_DEBUG_CHECKPOINT
+#define pr_ndckpt_ckpt(fmt, ...) pr_ndckpt(fmt, ##__VA_ARGS__)
+#else
+#define pr_ndckpt_ckpt(fmt, ...)
 #endif
 
 //#define NDCKPT_DEBUG_FLUSH
