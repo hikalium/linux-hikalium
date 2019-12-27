@@ -155,6 +155,7 @@ static inline void replace_page_with_nvdimm_page(pte_t *ent_of_page)
 
 void ndckpt_print_pml4(pgd_t *pgd);
 void erase_mappings_to_dram(pgd_t *t4, uint64_t start, uint64_t end);
+void pr_ndckpt_pml4(pgd_t *pgd);
 void pr_ndckpt_pgtable_range(pgd_t *t4, uint64_t start, uint64_t end);
 
 // @pman.c
@@ -195,6 +196,8 @@ void pproc_commit(struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 		  struct pt_regs *regs);
 void pproc_restore(struct task_struct *task,
 		   struct PersistentProcessInfo *pproc);
+void pproc_init(struct PersistentMemoryManager *pman, struct mm_struct *mm,
+		struct pt_regs *regs);
 
 // @sysfs.c
 int sysfs_interface_init(void);

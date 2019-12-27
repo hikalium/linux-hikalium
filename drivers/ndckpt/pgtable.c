@@ -146,6 +146,23 @@ void erase_mappings_to_dram(pgd_t *t4, uint64_t start, uint64_t end)
 	pr_ndckpt_pgtable("SFENCE() done\n");
 }
 
+void pr_ndckpt_pml4(pgd_t *pgd)
+{
+	int i;
+	uint64_t e;
+	uint64_t paddr;
+	pr_ndckpt("PML4 @ 0x%016llX on %s\n", (uint64_t)pgd,
+		  get_str_dram_or_nvdimm(pgd));
+	for (i = 0; i < PAGE_SIZE / sizeof(pgd_t); i++) {
+		e = (uint64_t)pgd[i].pgd;
+		paddr = e & PTE_PFN_MASK;
+		if ((e & _PAGE_PRESENT) == 0)
+			continue;
+		pr_ndckpt("PML4[0x%03X] -> paddr 0x%016llX on %s\n", i, paddr,
+			  get_str_dram_or_nvdimm_phys(paddr));
+	}
+}
+
 void pr_ndckpt_pgtable_range(pgd_t *t4, uint64_t start, uint64_t end)
 {
 	uint64_t addr;
