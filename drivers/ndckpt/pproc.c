@@ -149,7 +149,7 @@ void pproc_printk(struct PersistentProcessInfo *pproc)
 	pr_ndckpt("  Ctx #%d is valid\n", pproc->valid_ctx_idx);
 	for (i = 0; i < 2; i++) {
 		pr_ndckpt("Ctx #%d:\n", i);
-		ndckpt_print_pml4(pproc->ctx[i].pgd);
+		pr_ndckpt_pml4(pproc->ctx[i].pgd);
 		pproc_print_regs(pproc, i);
 	}
 }
@@ -374,14 +374,15 @@ static void flush_target_vmas(struct mm_struct *mm)
 	}
 }
 
-static void sync_target_vmas(struct mm_struct *mm, pgd_t *dst_pgd)
+static void sync_target_vmas(struct mm_struct *mm, pgd_t *dst_pgd,
+			     pgd_t *src_pgd)
 {
 	struct vm_area_struct *vma;
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
 			continue;
 		}
-		sync_pages(mm->pgd, dst_pgd, vma->vm_start, vma->vm_end, vma);
+		sync_pages(src_pgd, dst_pgd, vma->vm_start, vma->vm_end, vma);
 	}
 }
 
@@ -398,9 +399,22 @@ void pproc_commit(struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 	// prepare next running context
 	pr_ndckpt_ckpt("Sync Ctx #%d -> Ctx #%d\n", prev_running_ctx_idx,
 		       next_running_ctx_idx);
-	sync_target_vmas(mm, pproc->ctx[next_running_ctx_idx].pgd);
+	sync_target_vmas(mm, pproc->ctx[next_running_ctx_idx].pgd,
+			 pproc->ctx[prev_running_ctx_idx].pgd);
 	// Finally, switch the cr3 to the new running context's pgd.
 	switch_mm_context(mm, pproc->ctx[next_running_ctx_idx].pgd);
+}
+
+static void copy_pml4_kernel_map(pgd_t *ctx_pgd, pgd_t *mm_pgd)
+{
+	int i;
+	pr_ndckpt(
+		"copy kernel map to ctx_pgd @ 0x%016llX from mm_pgd 0x%016llX\n",
+		(uint64_t)ctx_pgd, (uint64_t)mm_pgd);
+	for (i = PAGE_SIZE / sizeof(pgd_t) / 2; i < PAGE_SIZE / sizeof(pgd_t);
+	     i++) {
+		ctx_pgd[i].pgd = mm_pgd[i].pgd;
+	}
 }
 
 static bool verify_pml4_kernel_map(pgd_t *mm_pgd, pgd_t *ctx_pgd)
@@ -431,9 +445,11 @@ void pproc_restore(struct task_struct *task,
 	pr_ndckpt_restore("restore from obj id = %016llX\n", task->ndckpt_id);
 	pproc_printk(pproc);
 	BUG_ON(valid_ctx_idx < 0 || 2 <= valid_ctx_idx);
+	// Copy data to running ctx to valid ctx and adjust dram mappings
 	pr_ndckpt_restore("  valid_ctx_idx: %d\n", valid_ctx_idx);
 	pproc_print_regs(pproc, valid_ctx_idx);
 	pproc_restore_regs(regs, pproc, valid_ctx_idx);
+	pproc_set_regs(pproc, 1 - valid_ctx_idx, regs);
 	while (vma) {
 		pr_ndckpt_restore(
 			"vma@0x%016llX [0x%016llX - 0x%016llX] 0x%016llX\n",
@@ -462,16 +478,20 @@ void pproc_restore(struct task_struct *task,
 		}
 		vma = vma->vm_next;
 	}
+	sync_target_vmas(mm, pproc->ctx[1 - valid_ctx_idx].pgd,
+			 pproc->ctx[valid_ctx_idx].pgd);
+	// Copy upper harf of page mapping for kernel
+	copy_pml4_kernel_map(pproc->ctx[0].pgd, mm->pgd);
+	copy_pml4_kernel_map(pproc->ctx[1].pgd, mm->pgd);
 	pr_ndckpt_pml4(mm->pgd);
 	pr_ndckpt_pml4(pproc->ctx[0].pgd);
 	pr_ndckpt_pml4(pproc->ctx[1].pgd);
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[0].pgd, mm->pgd));
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[1].pgd, mm->pgd));
 
-	switch_mm_context(task->mm, pproc->ctx[valid_ctx_idx].pgd);
-	sync_target_vmas(mm, pproc->ctx[1 - valid_ctx_idx].pgd);
-	pproc_set_regs(pproc, 1 - valid_ctx_idx, regs);
-	pproc_set_valid_ctx(pproc, 1 - valid_ctx_idx);
+	// Switch mm to the running context
+	switch_mm_context(task->mm, pproc->ctx[1 - valid_ctx_idx].pgd);
+	// Registers have been already restored. Run!
 }
 
 static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
@@ -570,11 +590,13 @@ void pproc_init(struct PersistentMemoryManager *pman, struct mm_struct *mm,
 	// ctx 0
 	pgd_ctx0 = ndckpt_alloc_zeroed_page();
 	memcpy(pgd_ctx0, mm->pgd, PAGE_SIZE);
+	ndckpt_clwb_range(pgd_ctx0, PAGE_SIZE);
 	pproc_set_pgd(pproc, 0, pgd_ctx0);
 	pproc_set_regs(pproc, 0, regs);
 	// ctx 1
 	pgd_ctx1 = ndckpt_alloc_zeroed_page();
 	memcpy(pgd_ctx1, mm->pgd, PAGE_SIZE);
+	ndckpt_clwb_range(pgd_ctx1, PAGE_SIZE);
 	pproc_set_pgd(pproc, 1, pgd_ctx1);
 	pproc_set_regs(pproc, 1, regs);
 	// Set vma flags and replace stack pages with NVDIMM

@@ -124,6 +124,7 @@ static inline void replace_pdpt_with_nvdimm_page(pgd_t *ent_of_page)
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
 	ent_of_page->pgd = (ent_of_page->pgd & ~PTE_PFN_MASK) | new_page_paddr;
+	ndckpt_clwb(ent_of_page);
 }
 
 static inline void replace_pd_with_nvdimm_page(pud_t *ent_of_page)
@@ -133,6 +134,7 @@ static inline void replace_pd_with_nvdimm_page(pud_t *ent_of_page)
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
 	ent_of_page->pud = (ent_of_page->pud & ~PTE_PFN_MASK) | new_page_paddr;
+	ndckpt_clwb(ent_of_page);
 }
 
 static inline void replace_pt_with_nvdimm_page(pmd_t *ent_of_page)
@@ -142,6 +144,7 @@ static inline void replace_pt_with_nvdimm_page(pmd_t *ent_of_page)
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
 	ent_of_page->pmd = (ent_of_page->pmd & ~PTE_PFN_MASK) | new_page_paddr;
+	ndckpt_clwb(ent_of_page);
 }
 
 static inline void replace_page_with_nvdimm_page(pte_t *ent_of_page)
@@ -151,6 +154,7 @@ static inline void replace_page_with_nvdimm_page(pte_t *ent_of_page)
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
 	ent_of_page->pte = (ent_of_page->pte & ~PTE_PFN_MASK) | new_page_paddr;
+	ndckpt_clwb(ent_of_page);
 }
 
 void ndckpt_print_pml4(pgd_t *pgd);

@@ -148,6 +148,7 @@ int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
 	pr_ndckpt_pgalloc("vaddr: 0x%016llX\n", (uint64_t) new);
 	paravirt_alloc_pud(mm, pud_phys >> PAGE_SHIFT);
 	set_p4d(p4d, __p4d(_PAGE_TABLE | pud_phys));
+	ndckpt_clwb(p4d);
 	spin_unlock(&mm->page_table_lock);
 	return 0;
 }
@@ -175,6 +176,7 @@ int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address,
 	pr_ndckpt_pgalloc("vaddr: 0x%016llX\n", (uint64_t) new);
 	paravirt_alloc_pud(mm, phys >> PAGE_SHIFT);
 	set_pud(pud, __pud(_PAGE_TABLE | phys));
+	ndckpt_clwb(pud);
 	spin_unlock(&mm->page_table_lock);
 	return 0;
 }
@@ -191,6 +193,7 @@ void ndckpt__pte_alloc(struct vm_fault *vmf)
 	pte = pfn_pte(PHYS_PFN(paddr), vmf->vma->vm_page_prot);
 	/* No need to invalidate - it was non-present before */
 	*vmf->pte = pte;
+	ndckpt_clwb(vmf->pte);
 	update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
 }
 EXPORT_SYMBOL(ndckpt__pte_alloc);
@@ -208,6 +211,7 @@ int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
 		mm_inc_nr_ptes(mm);
 		ndckpt_pmd_populate(mm, pmd,
 				    (pte_t *)ndckpt_alloc_zeroed_page());
+		ndckpt_clwb(pmd);
 	}
 	return 0;
 }
