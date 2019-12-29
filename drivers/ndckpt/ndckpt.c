@@ -44,6 +44,7 @@ void *ndckpt_alloc_zeroed_page(void)
 {
 	void *page = pman_alloc_pages(first_pmem_device->virt_addr, 1);
 	memset(page, 0, PAGE_SIZE);
+	ndckpt_clwb_range(page, PAGE_SIZE);
 	return page;
 }
 EXPORT_SYMBOL(ndckpt_alloc_zeroed_page);
@@ -97,17 +98,7 @@ void ndckpt_handle_execve(struct task_struct *task)
 		handle_execve_resotre(task, task->ndckpt_id);
 		return;
 	}
-	pr_ndckpt(" start_code  = 0x%016lX\n", mm->start_code);
-	pr_ndckpt(" end_code    = 0x%016lX\n", mm->end_code);
-	pr_ndckpt(" start_data  = 0x%016lX\n", mm->start_data);
-	pr_ndckpt(" end_data    = 0x%016lX\n", mm->end_data);
-	pr_ndckpt(" start_brk  = 0x%016lX\n", mm->start_brk);
-	pr_ndckpt(" brk    = 0x%016lX\n", mm->brk);
-	pr_ndckpt(" start_stack = 0x%016lX\n", mm->start_stack);
-	pr_ndckpt(" stack_vm    = %ld\n", mm->stack_vm);
-
 	BUG_ON(pgtable_l5_enabled());
-
 	pproc_init(pman, mm, regs);
 }
 EXPORT_SYMBOL(ndckpt_handle_execve);

@@ -14,10 +14,17 @@
 // gregs[16] + RIP + RFLAGS
 #define PCTX_REGS (16 + 1 + 1)
 
+struct PersistentVMARange {
+	// Corresponds to vma->vm_start/end
+	uint64_t start, end;
+};
+
 struct PersistentProcessInfo {
 	struct PersistentExecutionContext {
 		pgd_t *volatile pgd;
 		uint64_t regs[PCTX_REGS];
+		struct PersistentVMARange heap;
+		struct PersistentVMARange stack;
 	} ctx[2];
 	int valid_ctx_idx;
 	volatile uint64_t signature;
@@ -119,6 +126,29 @@ void pproc_restore_regs(struct pt_regs *regs,
 	regs->flags = ctx->regs[PCTX_REG_IDX_RFLAGS];
 }
 
+void pproc_set_vma_range(struct PersistentProcessInfo *pproc,
+			 struct mm_struct *mm, int ctx_idx)
+{
+	struct vm_area_struct *vma;
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
+			pproc->ctx[ctx_idx].heap.start = vma->vm_start;
+			pproc->ctx[ctx_idx].heap.end = vma->vm_end;
+			continue;
+		}
+		if (vma->vm_start <= mm->start_stack &&
+		    mm->start_stack <= vma->vm_end) {
+			pproc->ctx[ctx_idx].stack.start = vma->vm_start;
+			pproc->ctx[ctx_idx].stack.end = vma->vm_end;
+			continue;
+		}
+	}
+	ndckpt_clwb_range(&pproc->ctx[ctx_idx].heap,
+			  sizeof(struct PersistentVMARange));
+	ndckpt_clwb_range(&pproc->ctx[ctx_idx].stack,
+			  sizeof(struct PersistentVMARange));
+}
+
 static const char *pctx_reg_names[PCTX_REGS] = {
 	"RAX", "RCX", "RDX", "RBX", "RSP", "RBP", "RSI", "RDI", "R8",
 	"R9",  "R10", "R11", "R12", "R13", "R14", "R15", "RIP", "RFLAGS",
@@ -132,8 +162,8 @@ void pproc_print_regs(struct PersistentProcessInfo *proc, int ctx_idx)
 	ctx = &proc->ctx[ctx_idx];
 	pr_ndckpt("regs in ctx[%d]\n", ctx_idx);
 	for (i = 0; i < PCTX_REGS; i++) {
-		pr_ndckpt("  %6s: 0x%016llX\n", pctx_reg_names[i],
-			  ctx->regs[i]);
+		pr_ndckpt("  %6s: 0x%016llX%c", pctx_reg_names[i], ctx->regs[i],
+			  (i & 1) ? '\n' : ' ');
 	}
 }
 
@@ -149,7 +179,8 @@ void pproc_printk(struct PersistentProcessInfo *pproc)
 	pr_ndckpt("  Ctx #%d is valid\n", pproc->valid_ctx_idx);
 	for (i = 0; i < 2; i++) {
 		pr_ndckpt("Ctx #%d:\n", i);
-		pr_ndckpt_pml4(pproc->ctx[i].pgd);
+		//pr_ndckpt_pml4(pproc->ctx[i].pgd);
+		ndckpt_print_pml4(pproc->ctx[i].pgd);
 		pproc_print_regs(pproc, i);
 	}
 }
@@ -247,10 +278,12 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 			tmp_page_addr = ndckpt_alloc_zeroed_page();
 			if (dst_t3) {
 				memcpy(tmp_page_addr, dst_t3, PAGE_SIZE);
+				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
 			}
 			*(p4d_t *)dst_e4 =
 				__p4d(_PAGE_TABLE |
 				      ndckpt_virt_to_phys(tmp_page_addr));
+			ndckpt_clwb(dst_e4);
 			continue; // Retry
 		}
 		traverse_pdpte(addr, src_t3, &src_e3, &src_t2);
@@ -264,9 +297,11 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 			tmp_page_addr = ndckpt_alloc_zeroed_page();
 			if (dst_t2) {
 				memcpy(tmp_page_addr, dst_t2, PAGE_SIZE);
+				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
 			}
 			*dst_e3 = __pud(_PAGE_TABLE |
 					ndckpt_virt_to_phys(tmp_page_addr));
+			ndckpt_clwb(dst_e3);
 			continue; // Retry
 		}
 		traverse_pde(addr, src_t2, &src_e2, &src_t1);
@@ -280,9 +315,11 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 			tmp_page_addr = ndckpt_alloc_zeroed_page();
 			if (dst_t1) {
 				memcpy(tmp_page_addr, dst_t1, PAGE_SIZE);
+				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
 			}
 			*dst_e2 = __pmd(_PAGE_TABLE |
 					ndckpt_virt_to_phys(tmp_page_addr));
+			ndckpt_clwb(dst_e2);
 			continue; // Retry
 		}
 		traverse_pte(addr, src_t1, &src_e1, &src_page_vaddr);
@@ -298,17 +335,22 @@ static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
 			if (dst_page_vaddr) {
 				memcpy(tmp_page_addr, dst_page_vaddr,
 				       PAGE_SIZE);
+				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
 			}
 			*dst_e1 = pfn_pte(
 				PHYS_PFN(ndckpt_virt_to_phys(tmp_page_addr)),
 				vma->vm_page_prot);
+			ndckpt_clwb(dst_e1);
 			update_mmu_cache(vma, addr, dst_e1);
 			continue; // Retry
 		}
 		// TODO: Reduce copy with dirty flag
 		memcpy(dst_page_vaddr, src_page_vaddr, PAGE_SIZE);
+		// Do not clwb dst_pages at this time because dst will be running ctx
+		// and they will be flushed on the next checkpoint.
 		addr += PAGE_SIZE;
 	}
+	ndckpt_sfence();
 }
 
 static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
@@ -347,16 +389,15 @@ static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
 			continue;
 		}
 		page_paddr = ndckpt_v2p(page_vaddr);
-		page_vaddr = ndckpt_p2v(page_paddr);
+		BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(page_vaddr));
 		pr_ndckpt_flush("    PAGE @ 0x%016llX v->p 0x%016llX\n", addr,
 				page_paddr);
-		if (e1->pte & _PAGE_DIRTY) {
-			ndckpt_clwb_range(page_vaddr, PAGE_SIZE);
-			e1->pte &= ~(uint64_t)_PAGE_DIRTY;
-			pr_ndckpt_flush(
-				"flushed dirty page @ 0x%016llX v->p 0x%016llX\n",
-				addr, page_paddr);
-		}
+		ndckpt_clwb_range(page_vaddr, PAGE_SIZE);
+		e1->pte &= ~(uint64_t)_PAGE_DIRTY;
+		ndckpt_clwb(&e1->pte);
+		pr_ndckpt_flush(
+			"flushed dirty page @ 0x%016llX v->p 0x%016llX\n", addr,
+			page_paddr);
 		addr += PAGE_SIZE;
 	}
 	ndckpt_sfence();
@@ -393,6 +434,7 @@ void pproc_commit(struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 	const int next_running_ctx_idx = 1 - prev_running_ctx_idx;
 	pproc_set_regs(pproc, prev_running_ctx_idx, regs);
 	flush_target_vmas(mm);
+	pproc_set_vma_range(pproc, mm, prev_running_ctx_idx);
 	pr_ndckpt_ckpt("Ctx #%d has been committed\n", prev_running_ctx_idx);
 	// At this point, running ctx has become clean so both context is valid.
 	pproc_set_valid_ctx(pproc, prev_running_ctx_idx);
@@ -460,12 +502,20 @@ void pproc_restore(struct task_struct *task,
 			pr_ndckpt_restore(
 				"  This is heap vma. Set VM_CKPT_TARGET.\n");
 			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			BUG_ON(vma->vm_start !=
+				       pproc->ctx[valid_ctx_idx].heap.start ||
+			       vma->vm_end !=
+				       pproc->ctx[valid_ctx_idx].heap.end);
 		}
 		if (vma->vm_start <= mm->start_stack &&
 		    mm->start_stack <= vma->vm_end) {
 			pr_ndckpt_restore(
 				"  This is stack vma. Set VM_CKPT_TARGET.\n");
 			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			BUG_ON(vma->vm_start !=
+				       pproc->ctx[valid_ctx_idx].stack.start ||
+			       vma->vm_end !=
+				       pproc->ctx[valid_ctx_idx].stack.end);
 		}
 		if (vma->vm_start <= mm->start_code &&
 		    mm->start_code <= vma->vm_end) {
@@ -484,8 +534,8 @@ void pproc_restore(struct task_struct *task,
 	copy_pml4_kernel_map(pproc->ctx[0].pgd, mm->pgd);
 	copy_pml4_kernel_map(pproc->ctx[1].pgd, mm->pgd);
 	pr_ndckpt_pml4(mm->pgd);
-	pr_ndckpt_pml4(pproc->ctx[0].pgd);
-	pr_ndckpt_pml4(pproc->ctx[1].pgd);
+	ndckpt_print_pml4(pproc->ctx[0].pgd);
+	ndckpt_print_pml4(pproc->ctx[1].pgd);
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[0].pgd, mm->pgd));
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[1].pgd, mm->pgd));
 
@@ -623,6 +673,8 @@ void pproc_init(struct PersistentMemoryManager *pman, struct mm_struct *mm,
 	pr_ndckpt_pml4(pproc->ctx[1].pgd);
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[0].pgd, mm->pgd));
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[1].pgd, mm->pgd));
+	pproc_set_vma_range(pproc, mm, 0);
+	pproc_set_vma_range(pproc, mm, 1);
 	// Set ctx 0: running, ctx 1: valid
 	switch_mm_context(mm, pgd_ctx0);
 	pproc_set_valid_ctx(pproc, 1);
