@@ -242,7 +242,7 @@ static inline void traverse_pte(uint64_t addr, pte_t *t1, pte_t **e1, void **t0)
 	*t0 = ndckpt_p2v((*e1)->pte & PTE_PFN_MASK);
 }
 
-static void sync_pages(pgd_t *src_t4, pgd_t *dst_t4, uint64_t start,
+static void sync_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
 		       uint64_t end, struct vm_area_struct *vma)
 {
 	uint64_t addr;
@@ -423,7 +423,7 @@ static void sync_target_vmas(struct mm_struct *mm, pgd_t *dst_pgd,
 		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
 			continue;
 		}
-		sync_pages(src_pgd, dst_pgd, vma->vm_start, vma->vm_end, vma);
+		sync_pages(dst_pgd, src_pgd, vma->vm_start, vma->vm_end, vma);
 	}
 }
 
