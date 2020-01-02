@@ -26,6 +26,7 @@ struct PersistentProcessInfo {
 		struct PersistentVMARange heap;
 		struct PersistentVMARange stack;
 	} ctx[2];
+	pgd_t *volatile org_pgd; // on DRAM
 	int valid_ctx_idx;
 	volatile uint64_t signature;
 };
@@ -33,6 +34,11 @@ struct PersistentProcessInfo {
 bool pproc_is_valid(struct PersistentProcessInfo *pproc)
 {
 	return pproc && pproc->signature == PPROC_SIGNATURE;
+}
+
+pgd_t *pproc_get_org_pgd(struct PersistentProcessInfo *pproc)
+{
+	return pproc->org_pgd;
 }
 
 struct PersistentProcessInfo *pproc_alloc(void)
@@ -183,63 +189,6 @@ void pproc_printk(struct PersistentProcessInfo *pproc)
 		ndckpt_print_pml4(pproc->ctx[i].pgd);
 		pproc_print_regs(pproc, i);
 	}
-}
-
-static inline uint64_t ndckpt_v2p(void *v)
-{
-	// v can be in NVDIMM or DRAM
-	return ndckpt_is_virt_addr_in_nvdimm(v) ? ndckpt_virt_to_phys(v) :
-						  __pa(v);
-}
-
-static inline void *ndckpt_p2v(uint64_t p)
-{
-	// v can be in NVDIMM or DRAM
-	return ndckpt_is_phys_addr_in_nvdimm(p) ? ndckpt_phys_to_virt(p) :
-						  __va(p);
-}
-
-static inline void traverse_pml4e(uint64_t addr, pgd_t *t4, pgd_t **e4,
-				  pud_t **t3)
-{
-	(*e4) = &t4[PADDR_TO_IDX_IN_PML4(addr)];
-	if (((*e4)->pgd & _PAGE_PRESENT) == 0) {
-		*t3 = NULL;
-		return;
-	}
-	*t3 = ndckpt_p2v((*e4)->pgd & PTE_PFN_MASK);
-}
-
-static inline void traverse_pdpte(uint64_t addr, pud_t *t3, pud_t **e3,
-				  pmd_t **t2)
-{
-	(*e3) = &t3[PADDR_TO_IDX_IN_PDPT(addr)];
-	if (((*e3)->pud & _PAGE_PRESENT) == 0) {
-		*t2 = NULL;
-		return;
-	}
-	*t2 = ndckpt_p2v((*e3)->pud & PTE_PFN_MASK);
-}
-
-static inline void traverse_pde(uint64_t addr, pmd_t *t2, pmd_t **e2,
-				pte_t **t1)
-{
-	(*e2) = &t2[PADDR_TO_IDX_IN_PD(addr)];
-	if (((*e2)->pmd & _PAGE_PRESENT) == 0) {
-		*t1 = NULL;
-		return;
-	}
-	*t1 = ndckpt_p2v((*e2)->pmd & PTE_PFN_MASK);
-}
-
-static inline void traverse_pte(uint64_t addr, pte_t *t1, pte_t **e1, void **t0)
-{
-	(*e1) = &t1[PADDR_TO_IDX_IN_PT(addr)];
-	if (((*e1)->pte & _PAGE_PRESENT) == 0) {
-		*t0 = NULL;
-		return;
-	}
-	*t0 = ndckpt_p2v((*e1)->pte & PTE_PFN_MASK);
 }
 
 static void sync_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
@@ -637,6 +586,10 @@ void pproc_init(struct PersistentMemoryManager *pman, struct mm_struct *mm,
 	struct PersistentProcessInfo *pproc = pproc_alloc();
 	pr_ndckpt("pproc pobj #%lld\n",
 		  pobj_get_header(pman->last_proc_info)->id);
+	// Save original mm->pgd to pproc
+	// This is only valid while the power is on, so there is no need to flush.
+	pproc->org_pgd = mm->pgd;
+
 	// ctx 0
 	pgd_ctx0 = ndckpt_alloc_zeroed_page();
 	memcpy(pgd_ctx0, mm->pgd, PAGE_SIZE);

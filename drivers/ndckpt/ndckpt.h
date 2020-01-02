@@ -5,9 +5,11 @@
 
 #define NDCKPT_DEBUG
 #ifdef NDCKPT_DEBUG
+#define pr_ndckpt_body(func, file, line, fmt, ...)                             \
+	printk("ndckpt %10s@%10s:%3d]: " pr_fmt(fmt), func, file, line,        \
+	       ##__VA_ARGS__)
 #define pr_ndckpt(fmt, ...)                                                    \
-	printk("ndckpt %10s@%10s:%3d]: " pr_fmt(fmt), __FUNCTION__, __FILE__,  \
-	       __LINE__, ##__VA_ARGS__)
+	pr_ndckpt_body(__FUNCTION__, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 #else
 #define pr_ndckpt(fmt, ...)
 #endif
@@ -57,6 +59,12 @@
 // struct vm_area_struct -> vm_ckpt_flags
 #define VM_CKPT_TARGET 0x0001
 
+#define pr_ndckpt_vma(vma)                                                     \
+	pr_ndckpt_body(__FUNCTION__, __FILE__, __LINE__,                       \
+		       "%s@0x%016llX [0x%016llX - 0x%016llX] 0x%016llX\n",     \
+		       #vma, (uint64_t)vma, (uint64_t)vma->vm_start,           \
+		       (uint64_t)vma->vm_end, (uint64_t)vma->vm_flags)
+
 /*
 	struct vm_fault vmf = {
 		.vma = vma,
@@ -79,6 +87,11 @@ int ndckpt_is_phys_addr_in_nvdimm(uint64_t paddr);
 int ndckpt_is_virt_addr_in_nvdimm(void *vaddr);
 int ndckpt_handle_checkpoint(void);
 void ndckpt_handle_execve(struct task_struct *task);
+
+static inline int ndckpt_is_target_vma(struct vm_area_struct *vma)
+{
+	return (vma->vm_ckpt_flags & VM_CKPT_TARGET) != 0;
+}
 
 static inline int ndckpt_is_enabled_on_current(void)
 {
@@ -219,5 +232,20 @@ static inline pte_t *ndckpt_pte_offset_kernel(pmd_t *pmd, unsigned long address)
 }
 
 void ndckpt__pte_alloc(struct vm_fault *vmf);
+
+void ndckpt_move_pages(struct vm_area_struct *dst_vma,
+		       struct vm_area_struct *src_vma, uint64_t dst_start,
+		       uint64_t src_start, uint64_t size); // @pgtable.c
+
+static inline unsigned long
+ndckpt_move_page_tables(struct vm_area_struct *src_vma, uint64_t src_begin,
+			struct vm_area_struct *dst_vma, uint64_t dst_begin,
+			uint64_t size, bool need_rmap_locks)
+{
+	pr_ndckpt_vma(dst_vma);
+	pr_ndckpt_vma(src_vma);
+	ndckpt_move_pages(dst_vma, src_vma, dst_begin, src_begin, size);
+	return size; // See move_page_tables() @ mm/mremap.c
+}
 
 #endif /* __NDCKPT_H__ */

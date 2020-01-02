@@ -117,6 +117,63 @@ extern struct pmem_device *first_pmem_device;
 #define PADDR_TO_IDX_IN_PD(paddr) ((paddr >> (12 + 9 * 1)) & 0x1FF)
 #define PADDR_TO_IDX_IN_PT(paddr) ((paddr >> (12 + 9 * 0)) & 0x1FF)
 
+static inline uint64_t ndckpt_v2p(void *v)
+{
+	// v can be in NVDIMM or DRAM
+	return ndckpt_is_virt_addr_in_nvdimm(v) ? ndckpt_virt_to_phys(v) :
+						  __pa(v);
+}
+
+static inline void *ndckpt_p2v(uint64_t p)
+{
+	// v can be in NVDIMM or DRAM
+	return ndckpt_is_phys_addr_in_nvdimm(p) ? ndckpt_phys_to_virt(p) :
+						  __va(p);
+}
+
+static inline void traverse_pml4e(uint64_t addr, pgd_t *t4, pgd_t **e4,
+				  pud_t **t3)
+{
+	(*e4) = &t4[PADDR_TO_IDX_IN_PML4(addr)];
+	if (((*e4)->pgd & _PAGE_PRESENT) == 0) {
+		*t3 = NULL;
+		return;
+	}
+	*t3 = ndckpt_p2v((*e4)->pgd & PTE_PFN_MASK);
+}
+
+static inline void traverse_pdpte(uint64_t addr, pud_t *t3, pud_t **e3,
+				  pmd_t **t2)
+{
+	(*e3) = &t3[PADDR_TO_IDX_IN_PDPT(addr)];
+	if (((*e3)->pud & _PAGE_PRESENT) == 0) {
+		*t2 = NULL;
+		return;
+	}
+	*t2 = ndckpt_p2v((*e3)->pud & PTE_PFN_MASK);
+}
+
+static inline void traverse_pde(uint64_t addr, pmd_t *t2, pmd_t **e2,
+				pte_t **t1)
+{
+	(*e2) = &t2[PADDR_TO_IDX_IN_PD(addr)];
+	if (((*e2)->pmd & _PAGE_PRESENT) == 0) {
+		*t1 = NULL;
+		return;
+	}
+	*t1 = ndckpt_p2v((*e2)->pmd & PTE_PFN_MASK);
+}
+
+static inline void traverse_pte(uint64_t addr, pte_t *t1, pte_t **e1, void **t0)
+{
+	(*e1) = &t1[PADDR_TO_IDX_IN_PT(addr)];
+	if (((*e1)->pte & _PAGE_PRESENT) == 0) {
+		*t0 = NULL;
+		return;
+	}
+	*t0 = ndckpt_p2v((*e1)->pte & PTE_PFN_MASK);
+}
+
 static inline void replace_pdpt_with_nvdimm_page(pgd_t *ent_of_page)
 {
 	void *old_page_vaddr = (void *)ndckpt_pgd_page_vaddr(*ent_of_page);
@@ -185,6 +242,7 @@ void pobj_printk(struct PersistentObjectHeader *pobj);
 // @pproc.c
 struct PersistentProcessInfo;
 bool pproc_is_valid(struct PersistentProcessInfo *pproc);
+pgd_t *pproc_get_org_pgd(struct PersistentProcessInfo *pproc);
 struct PersistentProcessInfo *pproc_alloc(void);
 void pproc_set_pgd(struct PersistentProcessInfo *pproc, int ctx_idx,
 		   pgd_t *pgd);

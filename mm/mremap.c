@@ -28,6 +28,10 @@
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
 
+#ifdef CONFIG_NDCKPT
+#include "../drivers/ndckpt/ndckpt.h"
+#endif
+
 #include "internal.h"
 
 static pmd_t *get_old_pmd(struct mm_struct *mm, unsigned long addr)
@@ -245,6 +249,13 @@ unsigned long move_page_tables(struct vm_area_struct *vma,
 	unsigned long extent, next, old_end;
 	struct mmu_notifier_range range;
 	pmd_t *old_pmd, *new_pmd;
+
+#ifdef CONFIG_NDCKPT
+  if(ndckpt_is_enabled_on_current()) {
+    return ndckpt_move_page_tables(vma, old_addr,
+        new_vma, new_addr, len, need_rmap_locks);
+  }
+#endif
 
 	old_end = old_addr + len;
 	flush_cache_range(vma, old_addr, old_end);
@@ -605,6 +616,8 @@ SYSCALL_DEFINE5(mremap, unsigned long, addr, unsigned long, old_len,
 	LIST_HEAD(uf_unmap_early);
 	LIST_HEAD(uf_unmap);
 
+  printk("mremap: addr=0x%016lx old_len=0x%016lx new_len=0x%016lx\n flags=0x%016lx new_addr=0x%016lx\n", addr, old_len, new_len, flags, new_addr);
+
 	if (flags & ~(MREMAP_FIXED | MREMAP_MAYMOVE))
 		return ret;
 
@@ -706,7 +719,6 @@ SYSCALL_DEFINE5(mremap, unsigned long, addr, unsigned long, old_len,
 			ret = new_addr;
 			goto out;
 		}
-
 		ret = move_vma(vma, addr, old_len, new_len, new_addr,
 			       &locked, &uf, &uf_unmap);
 	}

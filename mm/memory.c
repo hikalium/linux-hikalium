@@ -3940,47 +3940,30 @@ unlock:
 
 static vm_fault_t handle_pte_fault_ndckpt(struct vm_fault *vmf)
 {
-	vm_fault_t fault_code;
-	pte_t pte;
-  if (vmf->vma && vmf->vma->vm_start <= current->mm->brk &&
-      vmf->vma->vm_end >= current->mm->start_brk) {
-    pr_ndckpt_fault("pte fault (heap) NOT existed @ 0x%016lX flags=0x%08X\n",
-        vmf->address, vmf->flags);
-    if (!vmf->pte) {
-      BUG_ON(!vma_is_anonymous(vmf->vma));
-      fault_code = do_anonymous_page(vmf);
-      // vmf->pte will be set by do_anonymous_page()
-      BUG_ON(!vmf->pte);
-      ndckpt__pte_alloc(vmf);
-      return fault_code;
-    } else {
-      BUG_ON(!(vmf->vma->vm_flags & VM_WRITE));
-      pr_ndckpt_fault("pte fault (heap) already existed @ 0x%016lX flags=0x%08X\n",
-          vmf->address, vmf->flags);
-      pte = pte_mkwrite(pte_mkdirty(*vmf->pte));
-      /* No need to invalidate - already invalidated by fault */
-      *vmf->pte = pte;
-      update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
-      return 0;
-    }
-  } else if (current->mm->start_code <= vmf->address &&
-      vmf->address < current->mm->end_code) {
-    pr_ndckpt_fault("pte fault (code) @ 0x%016lX flags=0x%08X\n",
-        vmf->address, vmf->flags);
-  } else if (current->mm->start_data <= vmf->address &&
-      vmf->address < current->mm->end_data) {
-    pr_ndckpt_fault("pte fault (data) @ 0x%016lX flags=0x%08X\n",
-        vmf->address, vmf->flags);
-  } else if (current->mm->start_stack > vmf->address &&
-      ((current->mm->start_stack - vmf->address) >> 12) <
-      current->mm->stack_vm) {
-    pr_ndckpt_fault("pte fault (stack) @ 0x%016lX flags=0x%08X\n",
-        vmf->address, vmf->flags);
-  } else {
-    pr_ndckpt_fault("pte fault (?) @ 0x%016lX flags=0x%08X\n",
-        vmf->address, vmf->flags);
+  vm_fault_t fault_code;
+  pte_t pte;
+  if (!ndckpt_is_target_vma(vmf->vma)) {
+    return handle_pte_fault_body(vmf);
   }
-  return handle_pte_fault_body(vmf);
+  pr_ndckpt_fault("pte fault in target vma (NOT existed) @ 0x%016lX flags=0x%08X\n",
+      vmf->address, vmf->flags);
+  if (!vmf->pte) {
+    BUG_ON(!vma_is_anonymous(vmf->vma));
+    fault_code = do_anonymous_page(vmf);
+    // vmf->pte will be set by do_anonymous_page()
+    BUG_ON(!vmf->pte);
+    ndckpt__pte_alloc(vmf);
+    return fault_code;
+  } else {
+    BUG_ON(!(vmf->vma->vm_flags & VM_WRITE));
+    pr_ndckpt_fault("pte fault in target vma (existed) @ 0x%016lX flags=0x%08X\n",
+        vmf->address, vmf->flags);
+    pte = pte_mkwrite(pte_mkdirty(*vmf->pte));
+    /* No need to invalidate - already invalidated by fault */
+    *vmf->pte = pte;
+    update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
+    return 0;
+  }
 }
 #endif
 
