@@ -14,7 +14,7 @@
 #define pr_ndckpt(fmt, ...)
 #endif
 
-#define NDCKPT_DEBUG_RESTORE
+//#define NDCKPT_DEBUG_RESTORE
 #ifdef NDCKPT_DEBUG_RESTORE
 #define pr_ndckpt_restore(fmt, ...) pr_ndckpt(fmt, ##__VA_ARGS__)
 #else
@@ -58,6 +58,9 @@
 
 // struct vm_area_struct -> vm_ckpt_flags
 #define VM_CKPT_TARGET 0x0001
+
+// struct mm_struct -> ndckpt_flags
+#define MM_NDCKPT_FLUSH_CR3 0x0001
 
 #define pr_ndckpt_vma(vma)                                                     \
 	pr_ndckpt_body(__FUNCTION__, __FILE__, __LINE__,                       \
@@ -247,5 +250,7 @@ ndckpt_move_page_tables(struct vm_area_struct *src_vma, uint64_t src_begin,
 	ndckpt_move_pages(dst_vma, src_vma, dst_begin, src_begin, size);
 	return size; // See move_page_tables() @ mm/mremap.c
 }
+
+int ndckpt_do_ndckpt(struct task_struct *target);
 
 #endif /* __NDCKPT_H__ */

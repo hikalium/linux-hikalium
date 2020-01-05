@@ -376,7 +376,25 @@ static void sync_target_vmas(struct mm_struct *mm, pgd_t *dst_pgd,
 	}
 }
 
-void pproc_commit(struct PersistentProcessInfo *pproc, struct mm_struct *mm,
+static inline void switch_mm_context(struct task_struct *target,
+				     struct mm_struct *mm, pgd_t *new_pgd)
+{
+	// Set mm->pgd and cr3
+	mm->pgd = new_pgd;
+	if (target != current) {
+		// skip updating cr3 because current context is not a target.
+		mm->ndckpt_flags |= MM_NDCKPT_FLUSH_CR3;
+		return;
+	}
+	// https://elixir.bootlin.com/linux/v5.1.3/source/arch/x86/include/asm/tlbflush.h#L131
+	// We can't specify CR3_NOFLUSH here
+	// because mappings may be different between two contexts.
+	write_cr3((CR3_ADDR_MASK & ndckpt_virt_to_phys(new_pgd)) |
+		  (CR3_PCID_MASK & __read_cr3()) /* | CR3_NOFLUSH */);
+}
+
+void pproc_commit(struct task_struct *target,
+		  struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 		  struct pt_regs *regs)
 {
 	const int prev_running_ctx_idx = pproc_get_running_ctx(pproc);
@@ -393,7 +411,7 @@ void pproc_commit(struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 	sync_target_vmas(mm, pproc->ctx[next_running_ctx_idx].pgd,
 			 pproc->ctx[prev_running_ctx_idx].pgd);
 	// Finally, switch the cr3 to the new running context's pgd.
-	switch_mm_context(mm, pproc->ctx[next_running_ctx_idx].pgd);
+	switch_mm_context(target, mm, pproc->ctx[next_running_ctx_idx].pgd);
 }
 
 static void copy_pml4_kernel_map(pgd_t *ctx_pgd, pgd_t *mm_pgd)
@@ -426,14 +444,14 @@ static bool verify_pml4_kernel_map(pgd_t *mm_pgd, pgd_t *ctx_pgd)
 	return is_invalid;
 }
 
-void pproc_restore(struct task_struct *task,
+void pproc_restore(struct task_struct *target,
 		   struct PersistentProcessInfo *pproc)
 {
-	struct pt_regs *regs = task_pt_regs(task);
-	struct mm_struct *mm = task->mm;
+	struct pt_regs *regs = task_pt_regs(target);
+	struct mm_struct *mm = target->mm;
 	struct vm_area_struct *vma = mm->mmap;
 	const int valid_ctx_idx = pproc->valid_ctx_idx;
-	pr_ndckpt_restore("restore from obj id = %016llX\n", task->ndckpt_id);
+	pr_ndckpt_restore("restore from obj id = %016llX\n", target->ndckpt_id);
 	pproc_printk(pproc);
 	BUG_ON(valid_ctx_idx < 0 || 2 <= valid_ctx_idx);
 	// Copy data to running ctx to valid ctx and adjust dram mappings
@@ -489,7 +507,8 @@ void pproc_restore(struct task_struct *task,
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[1].pgd, mm->pgd));
 
 	// Switch mm to the running context
-	switch_mm_context(task->mm, pproc->ctx[1 - valid_ctx_idx].pgd);
+	switch_mm_context(target, target->mm,
+			  pproc->ctx[1 - valid_ctx_idx].pgd);
 	// Registers have been already restored. Run!
 }
 
@@ -577,7 +596,8 @@ replace_stack_pages_with_nvdimm(struct PersistentMemoryManager *pman,
 	replace_pages_with_nvdimm(pgd, vma->vm_start, vma->vm_end);
 }
 
-void pproc_init(struct PersistentMemoryManager *pman, struct mm_struct *mm,
+void pproc_init(struct task_struct *target,
+		struct PersistentMemoryManager *pman, struct mm_struct *mm,
 		struct pt_regs *regs)
 {
 	struct vm_area_struct *vma = mm->mmap;
@@ -629,7 +649,7 @@ void pproc_init(struct PersistentMemoryManager *pman, struct mm_struct *mm,
 	pproc_set_vma_range(pproc, mm, 0);
 	pproc_set_vma_range(pproc, mm, 1);
 	// Set ctx 0: running, ctx 1: valid
-	switch_mm_context(mm, pgd_ctx0);
+	switch_mm_context(target, mm, pgd_ctx0);
 	pproc_set_valid_ctx(pproc, 1);
 	// At this point, this process can be recovered from pproc
 	pman_set_last_proc_info(pman, pproc);

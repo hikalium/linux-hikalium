@@ -447,6 +447,13 @@ void switch_mm_irqs_off(struct mm_struct *prev, struct mm_struct *next,
 		barrier();
 	}
 
+#ifdef CONFIG_NDCKPT
+  if(next->ndckpt_flags & MM_NDCKPT_FLUSH_CR3) {
+    need_flush = true;
+    next->ndckpt_flags &= ~MM_NDCKPT_FLUSH_CR3;
+  }
+#endif
+
 	if (need_flush) {
 		this_cpu_write(cpu_tlbstate.ctxs[new_asid].ctx_id, next->context.ctx_id);
 		this_cpu_write(cpu_tlbstate.ctxs[new_asid].tlb_gen, next_tlb_gen);

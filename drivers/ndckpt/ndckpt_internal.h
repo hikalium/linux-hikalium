@@ -26,6 +26,11 @@ static inline void ndckpt_invlpg(volatile void *__p)
 	asm volatile("invlpg %0" : "+m"(*(volatile char __force *)__p));
 }
 
+static inline void ndckpt_mfence(void)
+{
+	asm volatile("mfence");
+}
+
 static inline void ndckpt_clwb_range(volatile void *p, size_t byte_size)
 {
 	const uint64_t end_addr = (uint64_t)p + byte_size;
@@ -59,18 +64,6 @@ static inline const char *get_str_dram_or_nvdimm(void *p)
 static inline const char *get_str_dram_or_nvdimm_phys(uint64_t p)
 {
 	return ndckpt_is_phys_addr_in_nvdimm(p) ? "NVDIMM" : ">DRAM<";
-}
-
-static inline void switch_mm_context(struct mm_struct *mm, pgd_t *new_pgd)
-{
-	// Set mm->pgd and cr3
-	// https://elixir.bootlin.com/linux/v5.1.3/source/arch/x86/include/asm/tlbflush.h#L131
-	// TODO: We believe that we can specify CR3_NOFLUSH here,
-	// but it does not work for now.
-	uint64_t new_cr3 = (CR3_ADDR_MASK & ndckpt_virt_to_phys(new_pgd)) |
-			   (CR3_PCID_MASK & __read_cr3()) /* | CR3_NOFLUSH */;
-	mm->pgd = new_pgd;
-	write_cr3(new_cr3);
 }
 
 static inline bool is_vma_ndckpt_target(struct vm_area_struct *vma)
@@ -254,12 +247,12 @@ void pproc_restore_regs(struct pt_regs *regs,
 			struct PersistentProcessInfo *proc, int ctx_idx);
 void pproc_print_regs(struct PersistentProcessInfo *proc, int ctx_idx);
 void pproc_printk(struct PersistentProcessInfo *pproc);
-void pproc_commit(struct PersistentProcessInfo *pproc, struct mm_struct *mm,
+void pproc_commit(struct task_struct *target,
+		  struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 		  struct pt_regs *regs);
-void pproc_restore(struct task_struct *task,
-		   struct PersistentProcessInfo *pproc);
-void pproc_init(struct PersistentMemoryManager *pman, struct mm_struct *mm,
-		struct pt_regs *regs);
+void pproc_restore(struct task_struct *, struct PersistentProcessInfo *);
+void pproc_init(struct task_struct *, struct PersistentMemoryManager *,
+		struct mm_struct *, struct pt_regs *);
 
 // @sysfs.c
 int sysfs_interface_init(void);

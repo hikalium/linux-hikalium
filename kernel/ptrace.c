@@ -31,6 +31,10 @@
 #include <linux/compat.h>
 #include <linux/sched/signal.h>
 
+#ifdef CONFIG_NDCKPT
+#include "../drivers/ndckpt/ndckpt.h"
+#endif
+
 /*
  * Access another process' address space via ptrace.
  * Source/target buffer must be kernel space,
@@ -1105,6 +1109,11 @@ int ptrace_request(struct task_struct *child, long request,
 	case PTRACE_SECCOMP_GET_METADATA:
 		ret = seccomp_get_metadata(child, addr, datavp);
 		break;
+#ifdef CONFIG_NDCKPT
+  case PTRACE_DO_NDCKPT:
+		ret = ndckpt_do_ndckpt(child);
+    break;
+#endif
 
 	default:
 		break;

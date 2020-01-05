@@ -99,21 +99,26 @@ void ndckpt_handle_execve(struct task_struct *task)
 		return;
 	}
 	BUG_ON(pgtable_l5_enabled());
-	pproc_init(pman, mm, regs);
+	pproc_init(task, pman, mm, regs);
 }
 EXPORT_SYMBOL(ndckpt_handle_execve);
+
+static int do_ndckpt(struct task_struct *target)
+{
+	// This can be called from any 'current' task.
+	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
+	struct PersistentProcessInfo *pproc = pman->last_proc_info;
+	struct pt_regs *regs = task_pt_regs(target);
+	if (!(target->flags & PF_NDCKPT_ENABLED))
+		return -EINVAL;
+	pproc_commit(target, pproc, target->mm, regs);
+	return 0;
+}
 
 int ndckpt_handle_checkpoint(void)
 {
 	// This function should be called under the pt_regs is fully saved on the stack.
-	struct task_struct *task = current;
-	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
-	struct PersistentProcessInfo *pproc = pman->last_proc_info;
-	struct pt_regs *regs = task_pt_regs(task);
-	if (!(current->flags & PF_NDCKPT_ENABLED))
-		return -EINVAL;
-	pproc_commit(pproc, task->mm, regs);
-	return 0;
+	return do_ndckpt(current);
 }
 EXPORT_SYMBOL(ndckpt_handle_checkpoint);
 
@@ -207,6 +212,13 @@ int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
 	return 0;
 }
 EXPORT_SYMBOL(ndckpt___pte_alloc);
+
+int ndckpt_do_ndckpt(struct task_struct *target)
+{
+	BUG_ON(!task_is_traced(target));
+	return do_ndckpt(target);
+}
+EXPORT_SYMBOL(ndckpt_do_ndckpt);
 
 static int __init ndckpt_module_init(void)
 {

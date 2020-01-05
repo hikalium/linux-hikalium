@@ -440,6 +440,10 @@ struct mm_struct {
 
 		unsigned long flags; /* Must use atomic bitops to access */
 
+#ifdef CONFIG_NDCKPT
+  unsigned long ndckpt_flags;
+#endif
+
 		struct core_state *core_state; /* coredumping support */
 #ifdef CONFIG_MEMBARRIER
 		atomic_t membarrier_state;
