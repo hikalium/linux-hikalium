@@ -68,6 +68,10 @@
 #include <asm/pgtable.h>
 #include <asm/mmu_context.h>
 
+#ifdef CONFIG_NDCKPT
+#include "../drivers/ndckpt/ndckpt.h"
+#endif
+
 static void __unhash_process(struct task_struct *p, bool group_dead)
 {
 	nr_threads--;
@@ -497,6 +501,10 @@ static void exit_mm(void)
 {
 	struct mm_struct *mm = current->mm;
 	struct core_state *core_state;
+
+#ifdef CONFIG_NDCKPT
+  ndckpt_exit_mm(current);
+#endif 
 
 	mm_release(current, mm);
 	if (!mm)

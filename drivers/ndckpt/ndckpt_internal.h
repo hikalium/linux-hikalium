@@ -250,7 +250,8 @@ void pproc_printk(struct PersistentProcessInfo *pproc);
 void pproc_commit(struct task_struct *target,
 		  struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 		  struct pt_regs *regs);
-void pproc_restore(struct task_struct *, struct PersistentProcessInfo *);
+void pproc_restore(struct PersistentMemoryManager *, struct task_struct *,
+		   struct PersistentProcessInfo *);
 void pproc_init(struct task_struct *, struct PersistentMemoryManager *,
 		struct mm_struct *, struct pt_regs *);
 

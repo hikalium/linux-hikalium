@@ -84,7 +84,7 @@ static void handle_execve_resotre(struct task_struct *task,
 	// TODO: use pproc_obj_id to select pobj being restored
 	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
 	struct PersistentProcessInfo *pproc = pman->last_proc_info;
-	pproc_restore(task, pproc);
+	pproc_restore(pman, task, pproc);
 }
 
 void ndckpt_handle_execve(struct task_struct *task)
@@ -122,6 +122,20 @@ int ndckpt_handle_checkpoint(void)
 }
 EXPORT_SYMBOL(ndckpt_handle_checkpoint);
 
+void ndckpt_exit_mm(struct task_struct *target)
+{
+	struct PersistentMemoryManager *pman;
+	struct PersistentProcessInfo *pproc;
+	if (!ndckpt_is_enabled_on_task(target))
+		return;
+	pman = first_pmem_device->virt_addr;
+	pproc = pman->last_proc_info;
+
+	target->mm->pgd =
+		pproc_get_org_pgd(pproc); // To avoid pproc ctx destruction
+}
+EXPORT_SYMBOL(ndckpt_exit_mm);
+
 int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
 		       struct vm_area_struct *vma)
 {
@@ -139,7 +153,6 @@ int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
 		return -EINVAL;
 	smp_wmb(); /* See comment in __pte_alloc */
 	spin_lock(&mm->page_table_lock);
-	mm_inc_nr_puds(mm);
 	pud_phys = ndckpt_virt_to_phys(new);
 	pr_ndckpt_pgalloc("vaddr: 0x%016llX\n", (uint64_t) new);
 	paravirt_alloc_pud(mm, pud_phys >> PAGE_SHIFT);
@@ -167,7 +180,6 @@ int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address,
 		return -EINVAL;
 	smp_wmb(); /* See comment in __pte_alloc */
 	spin_lock(&mm->page_table_lock);
-	mm_inc_nr_puds(mm);
 	phys = ndckpt_virt_to_phys(new);
 	pr_ndckpt_pgalloc("vaddr: 0x%016llX\n", (uint64_t) new);
 	paravirt_alloc_pud(mm, phys >> PAGE_SHIFT);
@@ -204,7 +216,6 @@ int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
 	}
 	smp_wmb(); /* Could be smp_wmb__xxx(before|after)_spin_lock */
 	if (likely(pmd_none(*pmd))) { /* Has another populated it ? */
-		mm_inc_nr_ptes(mm);
 		ndckpt_pmd_populate(mm, pmd,
 				    (pte_t *)ndckpt_alloc_zeroed_page());
 		ndckpt_clwb(pmd);

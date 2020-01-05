@@ -89,6 +89,7 @@ void *ndckpt_phys_to_virt(uint64_t paddr);
 int ndckpt_is_phys_addr_in_nvdimm(uint64_t paddr);
 int ndckpt_is_virt_addr_in_nvdimm(void *vaddr);
 int ndckpt_handle_checkpoint(void);
+void ndckpt_exit_mm(struct task_struct *target);
 void ndckpt_handle_execve(struct task_struct *task);
 
 static inline int ndckpt_is_target_vma(struct vm_area_struct *vma)
@@ -96,10 +97,15 @@ static inline int ndckpt_is_target_vma(struct vm_area_struct *vma)
 	return (vma->vm_ckpt_flags & VM_CKPT_TARGET) != 0;
 }
 
+static inline int ndckpt_is_enabled_on_task(struct task_struct *target)
+{
+	return target->flags & PF_NDCKPT_ENABLED &&
+	       (target->flags & PF_FORKNOEXEC) == 0;
+}
+
 static inline int ndckpt_is_enabled_on_current(void)
 {
-	return current->flags & PF_NDCKPT_ENABLED &&
-	       (current->flags & PF_FORKNOEXEC) == 0;
+	return ndckpt_is_enabled_on_task(current);
 }
 
 static inline pud_t *ndckpt_pud_offset(p4d_t *p4d, unsigned long address)
