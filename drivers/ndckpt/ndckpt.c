@@ -78,16 +78,16 @@ int ndckpt_is_virt_addr_in_nvdimm(void *vaddr)
 }
 EXPORT_SYMBOL(ndckpt_is_virt_addr_in_nvdimm);
 
-static void handle_execve_resotre(struct task_struct *task,
-				  uint64_t pproc_obj_id)
+static int handle_execve_resotre(struct task_struct *task,
+				 uint64_t pproc_obj_id)
 {
 	// TODO: use pproc_obj_id to select pobj being restored
 	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
 	struct PersistentProcessInfo *pproc = pman->last_proc_info;
-	pproc_restore(pman, task, pproc);
+	return pproc_restore(pman, task, pproc);
 }
 
-void ndckpt_handle_execve(struct task_struct *task)
+int64_t ndckpt_handle_execve(struct task_struct *task)
 {
 	struct mm_struct *mm;
 	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
@@ -95,11 +95,10 @@ void ndckpt_handle_execve(struct task_struct *task)
 	mm = task->mm;
 	pr_ndckpt("pid = %d\n", task->pid);
 	if (task->ndckpt_id) {
-		handle_execve_resotre(task, task->ndckpt_id);
-		return;
+		return handle_execve_resotre(task, task->ndckpt_id);
 	}
 	BUG_ON(pgtable_l5_enabled());
-	pproc_init(task, pman, mm, regs);
+	return pproc_init(task, pman, mm, regs);
 }
 EXPORT_SYMBOL(ndckpt_handle_execve);
 

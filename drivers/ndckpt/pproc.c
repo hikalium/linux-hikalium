@@ -653,9 +653,9 @@ static void fix_dram_part_of_ctx(struct mm_struct *mm,
 	sync_normal_vmas(mm, pproc->ctx[idx].pgd, mm->pgd);
 }
 
-void pproc_init(struct task_struct *target,
-		struct PersistentMemoryManager *pman, struct mm_struct *mm,
-		struct pt_regs *regs)
+int64_t pproc_init(struct task_struct *target,
+		   struct PersistentMemoryManager *pman, struct mm_struct *mm,
+		   struct pt_regs *regs)
 {
 	struct vm_area_struct *vma;
 	pgd_t *pgd_ctx0;
@@ -685,12 +685,12 @@ void pproc_init(struct task_struct *target,
 	pproc_set_regs(pproc, 0, regs);
 	pproc_set_valid_ctx(pproc, 0); // dummy
 
-	pproc_restore(pman, target, pproc);
+	return pproc_restore(pman, target, pproc);
 }
 
-void pproc_restore(struct PersistentMemoryManager *pman,
-		   struct task_struct *target,
-		   struct PersistentProcessInfo *pproc)
+int64_t pproc_restore(struct PersistentMemoryManager *pman,
+		      struct task_struct *target,
+		      struct PersistentProcessInfo *pproc)
 {
 	struct pt_regs *regs = task_pt_regs(target);
 	struct mm_struct *mm = target->mm;
@@ -730,4 +730,5 @@ void pproc_restore(struct PersistentMemoryManager *pman,
 	pr_ndckpt_pml4(pproc->ctx[1].pgd);
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[0].pgd, mm->pgd));
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[1].pgd, mm->pgd));
+	return regs->ax;
 }

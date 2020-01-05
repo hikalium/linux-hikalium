@@ -1713,7 +1713,7 @@ static int exec_binprm(struct linux_binprm *bprm)
 /*
  * sys_execve() executes a new program.
  */
-static int __do_execve_file(int fd, struct filename *filename,
+static long __do_execve_file(int fd, struct filename *filename,
 			    struct user_arg_ptr argv,
 			    struct user_arg_ptr envp,
 			    int flags, struct file *file)
@@ -1844,7 +1844,7 @@ static int __do_execve_file(int fd, struct filename *filename,
 		put_files_struct(displaced);
 #ifdef CONFIG_NDCKPT
   if(current->flags & PF_NDCKPT_ENABLED) {
-    ndckpt_handle_execve(current);
+    return ndckpt_handle_execve(current);
   }
 #endif
 	return retval;
@@ -1872,7 +1872,7 @@ out_ret:
 	return retval;
 }
 
-static int do_execveat_common(int fd, struct filename *filename,
+static long do_execveat_common(int fd, struct filename *filename,
 			      struct user_arg_ptr argv,
 			      struct user_arg_ptr envp,
 			      int flags)
@@ -1888,7 +1888,7 @@ int do_execve_file(struct file *file, void *__argv, void *__envp)
 	return __do_execve_file(AT_FDCWD, NULL, argv, envp, 0, file);
 }
 
-int do_execve(struct filename *filename,
+int64_t do_execve(struct filename *filename,
 	const char __user *const __user *__argv,
 	const char __user *const __user *__envp)
 {
