@@ -416,8 +416,9 @@ static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
 		}
 		page_paddr = ndckpt_v2p(page_vaddr);
 		BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(page_vaddr));
-		pr_ndckpt_flush("    PAGE @ 0x%016llX v->p 0x%016llX\n", addr,
-				page_paddr);
+		if ((e1->pte & _PAGE_DIRTY) == 0) {
+			// Page is clean. Skip flushing
+		}
 		ndckpt_clwb_range(page_vaddr, PAGE_SIZE);
 		e1->pte &= ~(uint64_t)_PAGE_DIRTY;
 		ndckpt_clwb(&e1->pte);
