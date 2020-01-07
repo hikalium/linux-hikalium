@@ -28,6 +28,7 @@ struct PersistentProcessInfo {
 	} ctx[2];
 	pgd_t *volatile org_pgd; // on DRAM
 	int valid_ctx_idx;
+	spinlock_t ckpt_lock;
 	volatile uint64_t signature;
 };
 
@@ -156,10 +157,12 @@ void pproc_set_vma_range(struct PersistentProcessInfo *pproc,
 			  sizeof(struct PersistentVMARange));
 }
 
+#ifdef NDCKPT_DEBUG
 static const char *pctx_reg_names[PCTX_REGS] = {
 	"RAX", "RCX", "RDX", "RBX", "RSP", "RBP", "RSI", "RDI", "R8",
 	"R9",  "R10", "R11", "R12", "R13", "R14", "R15", "RIP", "RFLAGS",
 };
+#endif
 
 void pproc_print_regs(struct PersistentProcessInfo *proc, int ctx_idx)
 {
@@ -491,6 +494,12 @@ void pproc_commit(struct task_struct *target,
 {
 	const int prev_running_ctx_idx = pproc_get_running_ctx(pproc);
 	const int next_running_ctx_idx = 1 - prev_running_ctx_idx;
+
+	if (!spin_trylock(&pproc->ckpt_lock)) {
+		printk("Failed to pproc_commit\n");
+		return;
+	}
+
 	pproc_set_regs(pproc, prev_running_ctx_idx, regs);
 	flush_target_vmas(mm);
 	pproc_set_vma_range(pproc, mm, prev_running_ctx_idx);
@@ -504,6 +513,7 @@ void pproc_commit(struct task_struct *target,
 			 pproc->ctx[prev_running_ctx_idx].pgd);
 	// Finally, switch the cr3 to the new running context's pgd.
 	switch_mm_context(target, mm, pproc->ctx[next_running_ctx_idx].pgd);
+	spin_unlock(&pproc->ckpt_lock);
 }
 
 static void copy_pml4_kernel_map(pgd_t *ctx_pgd, pgd_t *mm_pgd)
@@ -696,6 +706,8 @@ int64_t pproc_restore(struct PersistentMemoryManager *pman,
 	struct pt_regs *regs = task_pt_regs(target);
 	struct mm_struct *mm = target->mm;
 	const int valid_ctx_idx = pproc->valid_ctx_idx;
+
+	spin_lock_init(&pproc->ckpt_lock);
 
 	pr_ndckpt_restore("restore from obj id = %016llX\n", target->ndckpt_id);
 	pproc_printk(pproc);
