@@ -466,6 +466,13 @@ static void sync_normal_vmas(struct mm_struct *mm, pgd_t *dst_pgd,
 		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) != 0) {
 			continue;
 		}
+		// first, erase existed dram mappings
+		erase_mappings_to_dram(dst_pgd, vma->vm_start, vma->vm_end);
+	}
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) != 0) {
+			continue;
+		}
 		sync_dram_pages(dst_pgd, src_pgd, vma->vm_start, vma->vm_end,
 				vma);
 	}
