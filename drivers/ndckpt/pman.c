@@ -61,7 +61,7 @@ void *pman_alloc_pages(struct PersistentMemoryManager *pman,
 	    num_of_pages_requested + 1 + next_page_idx >=
 		    pman->page_idx + pman->num_of_pages) {
 		printk("ndckpt: !!!!!!!!!! No more pages\n");
-		return NULL;
+		BUG();
 	}
 	new_obj = (struct PersistentObjectHeader *)(((next_page_idx + 1)
 						     << kPageSizeExponent) -

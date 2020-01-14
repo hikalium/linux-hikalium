@@ -77,74 +77,6 @@ void ndckpt_print_pml4(pgd_t *pgd)
 	}
 }
 
-void erase_mappings_to_dram(pgd_t *t4, uint64_t start, uint64_t end)
-{
-	uint64_t addr;
-	pgd_t *e4;
-	pud_t *t3 = NULL;
-	pud_t *e3;
-	pmd_t *t2 = NULL;
-	pmd_t *e2;
-	pte_t *t1 = NULL;
-	pte_t *e1;
-	uint64_t page_paddr;
-	int i1 = -1, i2 = -1, i3 = -1, i4 = -1;
-	pr_ndckpt_pgtable("erase_mappings_to_dram: [0x%016llX, 0x%016llX)\n",
-			  start, end);
-	for (addr = start; addr < end;) {
-		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
-			i4 = PADDR_TO_IDX_IN_PML4(addr);
-			e4 = &t4[i4];
-			if ((e4->pgd & _PAGE_PRESENT) == 0) {
-				addr += PGDIR_SIZE;
-				continue;
-			}
-			t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
-		}
-		if (i3 != PADDR_TO_IDX_IN_PDPT(addr)) {
-			i3 = PADDR_TO_IDX_IN_PDPT(addr);
-			e3 = &t3[i3];
-			if ((e3->pud & _PAGE_PRESENT) == 0) {
-				addr += PUD_SIZE;
-				continue;
-			}
-			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
-		}
-		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
-			i2 = PADDR_TO_IDX_IN_PD(addr);
-			e2 = &t2[i2];
-			if ((e2->pmd & _PAGE_PRESENT) == 0) {
-				addr += PMD_SIZE;
-				continue;
-			}
-			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
-			if (!ndckpt_is_virt_addr_in_nvdimm(t1)) {
-				e2->pmd = 0;
-				ndckpt_invlpg((void *)addr);
-				addr += PMD_SIZE;
-				continue;
-			}
-		}
-		i1 = PADDR_TO_IDX_IN_PT(addr);
-		e1 = &t1[i1];
-		if ((e1->pte & _PAGE_PRESENT) == 0) {
-			addr += PAGE_SIZE;
-			continue;
-		}
-		page_paddr = e1->pte & PTE_PFN_MASK;
-		if (!ndckpt_is_phys_addr_in_nvdimm(page_paddr)) {
-			pr_ndckpt_pgtable(
-				"clear mapping to DRAM page @ 0x%016llX v->p 0x%016llX\n",
-				addr, page_paddr);
-			e1->pte = 0;
-			ndckpt_invlpg((void *)addr);
-		}
-		addr += PAGE_SIZE;
-	}
-	ndckpt_sfence();
-	pr_ndckpt_pgtable("SFENCE() done\n");
-}
-
 void pr_ndckpt_pml4(pgd_t *pgd)
 {
 	int i;
@@ -177,46 +109,45 @@ void pr_ndckpt_pgtable_range(pgd_t *t4, uint64_t start, uint64_t end)
 	for (addr = start; addr < end;) {
 		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
 			i4 = PADDR_TO_IDX_IN_PML4(addr);
-			pr_ndckpt_pgtable("PML4[0x%03X]\n", i4);
+			pr_ndckpt("PML4[0x%03X]\n", i4);
 			e4 = &t4[i4];
 			if ((e4->pgd & _PAGE_PRESENT) == 0) {
-				addr += PGDIR_SIZE;
+				addr = next_pml4e_addr(addr);
 				continue;
 			}
 			t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
 		}
 		if (i3 != PADDR_TO_IDX_IN_PDPT(addr)) {
 			i3 = PADDR_TO_IDX_IN_PDPT(addr);
-			pr_ndckpt_pgtable(" PDPT[0x%03X]\n", i3);
+			pr_ndckpt(" PDPT[0x%03X]\n", i3);
 			e3 = &t3[i3];
 			if ((e3->pud & _PAGE_PRESENT) == 0) {
-				addr += PUD_SIZE;
+				addr = next_pdpte_addr(addr);
 				continue;
 			}
 			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
 		}
 		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
 			i2 = PADDR_TO_IDX_IN_PD(addr);
-			pr_ndckpt_pgtable("  PD  [0x%03X]\n", i2);
+			pr_ndckpt("  PD  [0x%03X]\n", i2);
 			e2 = &t2[i2];
 			if ((e2->pmd & _PAGE_PRESENT) == 0) {
-				addr += PMD_SIZE;
+				addr = next_pde_addr(addr);
 				continue;
 			}
 			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
 		}
 		i1 = PADDR_TO_IDX_IN_PT(addr);
-		pr_ndckpt_pgtable("   PT  [0x%03X]\n", i1);
+		pr_ndckpt("   PT  [0x%03X]\n", i1);
 		e1 = &t1[i1];
 		if ((e1->pte & _PAGE_PRESENT) == 0) {
-			addr += PAGE_SIZE;
+			addr = next_pte_addr(addr);
 			continue;
 		}
 		page_paddr = e1->pte & PTE_PFN_MASK;
-		pr_ndckpt_pgtable("    PAGE @ 0x%016llX v->p 0x%016llX on %s\n",
-				  addr, page_paddr,
-				  get_str_dram_or_nvdimm_phys(page_paddr));
-		addr += PAGE_SIZE;
+		pr_ndckpt("    PAGE @ 0x%016llX v->p 0x%016llX on %s\n", addr,
+			  page_paddr, get_str_dram_or_nvdimm_phys(page_paddr));
+		addr = next_pte_addr(addr);
 	}
 }
 
@@ -261,9 +192,7 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		traverse_pml4e(src_start + ofs, src_t4, &src_e4, &src_t3);
 		traverse_pml4e(dst_start + ofs, dst_t4, &dst_e4, &dst_t3);
 		if (!src_t3) {
-			ofs = ((src_start + ofs + (1ULL << PGDIR_SHIFT)) &
-			       PGDIR_MASK) -
-			      src_start;
+			ofs = next_pml4e_addr(src_start + ofs) - src_start;
 			continue;
 		}
 		if (!dst_t3 || !ndckpt_is_virt_addr_in_nvdimm(dst_t3)) {
@@ -282,9 +211,7 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		traverse_pdpte(src_start + ofs, src_t3, &src_e3, &src_t2);
 		traverse_pdpte(dst_start + ofs, dst_t3, &dst_e3, &dst_t2);
 		if (!src_t2) {
-			ofs = ((src_start + ofs + (1ULL << PUD_SHIFT)) &
-			       PUD_MASK) -
-			      src_start;
+			ofs = next_pdpte_addr(src_start + ofs) - src_start;
 			continue;
 		}
 		if (!dst_t2 || !ndckpt_is_virt_addr_in_nvdimm(dst_t2)) {
@@ -302,9 +229,7 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		traverse_pde(src_start + ofs, src_t2, &src_e2, &src_t1);
 		traverse_pde(dst_start + ofs, dst_t2, &dst_e2, &dst_t1);
 		if (!src_t1) {
-			ofs = ((src_start + ofs + (1ULL << PMD_SHIFT)) &
-			       PMD_MASK) -
-			      src_start;
+			ofs = next_pde_addr(src_start + ofs) - src_start;
 			continue;
 		}
 		if (!dst_t1 || !ndckpt_is_virt_addr_in_nvdimm(dst_t1)) {
@@ -322,7 +247,7 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		traverse_pte(src_start + ofs, src_t1, &src_e1, &src_page_vaddr);
 		traverse_pte(dst_start + ofs, dst_t1, &dst_e1, &dst_page_vaddr);
 		if (!src_page_vaddr) {
-			ofs += PAGE_SIZE;
+			ofs = next_pte_addr(src_start + ofs) - src_start;
 			continue;
 		}
 		// Remap leaf page
@@ -335,7 +260,7 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		ndckpt_invlpg(src_page_vaddr);
 		ndckpt_invlpg((void *)(dst_start + ofs));
 
-		ofs += PAGE_SIZE;
+		ofs = next_pte_addr(src_start + ofs) - src_start;
 	}
 	ndckpt_sfence();
 }

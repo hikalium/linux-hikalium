@@ -223,7 +223,7 @@ static void sync_nvdimm_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
 		traverse_pml4e(addr, src_t4, &src_e4, &src_t3);
 		traverse_pml4e(addr, dst_t4, &dst_e4, &dst_t3);
 		if (!src_t3) {
-			addr += PGDIR_SIZE;
+			addr = next_pml4e_addr(addr);
 			continue;
 		}
 		if (!dst_t3 || !ndckpt_is_virt_addr_in_nvdimm(dst_t3)) {
@@ -242,7 +242,7 @@ static void sync_nvdimm_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
 		traverse_pdpte(addr, src_t3, &src_e3, &src_t2);
 		traverse_pdpte(addr, dst_t3, &dst_e3, &dst_t2);
 		if (!src_t2) {
-			addr += PUD_SIZE;
+			addr = next_pdpte_addr(addr);
 			continue;
 		}
 		if (!dst_t2 || !ndckpt_is_virt_addr_in_nvdimm(dst_t2)) {
@@ -260,7 +260,7 @@ static void sync_nvdimm_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
 		traverse_pde(addr, src_t2, &src_e2, &src_t1);
 		traverse_pde(addr, dst_t2, &dst_e2, &dst_t1);
 		if (!src_t1) {
-			addr += PMD_SIZE;
+			addr = next_pde_addr(addr);
 			continue;
 		}
 		if (!dst_t1 || !ndckpt_is_virt_addr_in_nvdimm(dst_t1)) {
@@ -278,7 +278,7 @@ static void sync_nvdimm_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
 		traverse_pte(addr, src_t1, &src_e1, &src_page_vaddr);
 		traverse_pte(addr, dst_t1, &dst_e1, &dst_page_vaddr);
 		if (!src_page_vaddr) {
-			addr += PAGE_SIZE;
+			addr = next_pte_addr(addr);
 			continue;
 		}
 		if (!dst_page_vaddr ||
@@ -301,7 +301,7 @@ static void sync_nvdimm_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
 		memcpy(dst_page_vaddr, src_page_vaddr, PAGE_SIZE);
 		// Do not clwb dst_pages at this time because dst will be running ctx
 		// and they will be flushed on the next checkpoint.
-		addr += PAGE_SIZE;
+		addr = next_pte_addr(addr);
 	}
 	ndckpt_sfence();
 }
@@ -331,55 +331,72 @@ static void sync_dram_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
 	pte_t *dst_e1;
 	void *dst_page_vaddr;
 
+	int count = 0;
+
+	pr_ndckpt("sync src");
+	pr_ndckpt_pgtable_range(src_t4, start, end);
+	pr_ndckpt("begin");
+	pr_ndckpt_pgtable_range(dst_t4, start, end);
+
 	for (addr = start; addr < end;) {
 		traverse_pml4e(addr, src_t4, &src_e4, &src_t3);
 		traverse_pml4e(addr, dst_t4, &dst_e4, &dst_t3);
 		if (!src_t3) {
-			addr += PGDIR_SIZE;
+			addr = next_pml4e_addr(addr);
 			continue;
 		}
-		if (!dst_t3) {
+		if (!ndckpt_is_virt_addr_in_nvdimm(dst_t3) &&
+		    dst_t3 != src_t3) {
 			*dst_e4 = *src_e4;
 			ndckpt_clwb(dst_e4);
+			count++;
 			continue; // Retry
 		}
 		traverse_pdpte(addr, src_t3, &src_e3, &src_t2);
 		traverse_pdpte(addr, dst_t3, &dst_e3, &dst_t2);
 		if (!src_t2) {
-			addr += PUD_SIZE;
+			addr = next_pdpte_addr(addr);
 			continue;
 		}
-		if (!dst_t2) {
+		if (!ndckpt_is_virt_addr_in_nvdimm(dst_t2) &&
+		    dst_t2 != src_t2) {
 			*dst_e3 = *src_e3;
 			ndckpt_clwb(dst_e3);
+			count++;
 			continue; // Retry
 		}
 		traverse_pde(addr, src_t2, &src_e2, &src_t1);
 		traverse_pde(addr, dst_t2, &dst_e2, &dst_t1);
 		if (!src_t1) {
-			addr += PMD_SIZE;
+			addr = next_pde_addr(addr);
 			continue;
 		}
-		if (!dst_t1) {
-			// Alloc
+		if (!ndckpt_is_virt_addr_in_nvdimm(dst_t1) &&
+		    dst_t1 != src_t1) {
 			*dst_e2 = *src_e2;
 			ndckpt_clwb(dst_e2);
+			count++;
 			continue; // Retry
 		}
 		traverse_pte(addr, src_t1, &src_e1, &src_page_vaddr);
 		traverse_pte(addr, dst_t1, &dst_e1, &dst_page_vaddr);
 		if (!src_page_vaddr) {
-			addr += PAGE_SIZE;
+			addr = next_pte_addr(addr);
 			continue;
 		}
-		if (!dst_page_vaddr) {
+		BUG_ON(ndckpt_is_virt_addr_in_nvdimm(dst_page_vaddr));
+		if (dst_page_vaddr != src_page_vaddr) {
 			*dst_e1 = *src_e1;
 			ndckpt_clwb(dst_e1);
+			count++;
 			continue; // Retry
 		}
-		addr += PAGE_SIZE;
+		addr = next_pte_addr(addr);
 	}
 	ndckpt_sfence();
+	pr_ndckpt("after");
+	pr_ndckpt_pgtable_range(dst_t4, start, end);
+	pr_ndckpt("end count=%d\n", count);
 }
 
 static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
@@ -394,31 +411,37 @@ static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
 	pte_t *e1;
 	void *page_vaddr;
 	uint64_t page_paddr;
+	pr_ndckpt_pgtable_range(t4, start, end);
 	pr_ndckpt_flush("flush_dirty_pages: [0x%016llX, 0x%016llX)\n", start,
 			end);
+	BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(t4));
 	for (addr = start; addr < end;) {
 		traverse_pml4e(addr, t4, &e4, &t3);
 		if (!t3) {
-			addr += PGDIR_SIZE;
+			addr = next_pml4e_addr(addr);
 			continue;
 		}
 		traverse_pdpte(addr, t3, &e3, &t2);
 		if (!t2) {
-			addr += PUD_SIZE;
+			addr = next_pdpte_addr(addr);
 			continue;
 		}
 		traverse_pde(addr, t2, &e2, &t1);
 		if (!t1) {
-			addr += PMD_SIZE;
+			addr = next_pde_addr(addr);
 			continue;
 		}
 		traverse_pte(addr, t1, &e1, &page_vaddr);
 		if (!page_vaddr) {
-			addr += PAGE_SIZE;
+			addr = next_pte_addr(addr);
 			continue;
 		}
 		page_paddr = ndckpt_v2p(page_vaddr);
-		BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(page_vaddr));
+		if (!ndckpt_is_virt_addr_in_nvdimm(page_vaddr)) {
+			printk("flush_dirty_pages: addr 0x%016llx pgd@0x%016llx\n",
+			       addr, (uint64_t)t4);
+			BUG();
+		}
 		if ((e1->pte & _PAGE_DIRTY) == 0) {
 			// Page is clean. Skip flushing
 		}
@@ -428,10 +451,59 @@ static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
 		pr_ndckpt_flush(
 			"flushed dirty page @ 0x%016llX v->p 0x%016llX\n", addr,
 			page_paddr);
-		addr += PAGE_SIZE;
+		addr = next_pte_addr(addr);
 	}
 	ndckpt_sfence();
 	pr_ndckpt_flush("SFENCE() done\n");
+}
+
+static void erase_mappings(pgd_t *t4, uint64_t start, uint64_t end)
+{
+	// This only erase entry on NVDIMM to avoid SEGV after reboot.
+	uint64_t addr;
+	pgd_t *e4;
+	pud_t *t3 = NULL;
+	pud_t *e3;
+	pmd_t *t2 = NULL;
+	pmd_t *e2;
+	pte_t *t1 = NULL;
+	pte_t *e1;
+	void *page_vaddr;
+	pr_ndckpt("[0x%016llX, 0x%016llX)\n", start, end);
+	pr_ndckpt("begin");
+	pr_ndckpt_pgtable_range(t4, start, end);
+	BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(t4));
+	for (addr = start; addr < end;) {
+		traverse_pml4e(addr, t4, &e4, &t3);
+		if (!t3 || !ndckpt_is_virt_addr_in_nvdimm(t3)) {
+			addr = next_pml4e_addr(addr);
+			continue;
+		}
+		traverse_pdpte(addr, t3, &e3, &t2);
+		if (!t2 || !ndckpt_is_virt_addr_in_nvdimm(t2)) {
+			addr = next_pdpte_addr(addr);
+			continue;
+		}
+		traverse_pde(addr, t2, &e2, &t1);
+		if (!t1 || !ndckpt_is_virt_addr_in_nvdimm(t1)) {
+			addr = next_pde_addr(addr);
+			continue;
+		}
+		traverse_pte(addr, t1, &e1, &page_vaddr);
+		if (!page_vaddr) {
+			addr = next_pte_addr(addr);
+			continue;
+		}
+		BUG_ON(ndckpt_is_virt_addr_in_nvdimm(page_vaddr));
+		e1->pte = 0;
+		ndckpt_clwb(&e1->pte);
+		addr = next_pte_addr(addr);
+	}
+	ndckpt_sfence();
+	pr_ndckpt_flush("SFENCE() done\n");
+	pr_ndckpt("after");
+	pr_ndckpt_pgtable_range(t4, start, end);
+	pr_ndckpt("end");
 }
 
 static void flush_target_vmas(struct mm_struct *mm)
@@ -466,13 +538,7 @@ static void sync_normal_vmas(struct mm_struct *mm, pgd_t *dst_pgd,
 		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) != 0) {
 			continue;
 		}
-		// first, erase existed dram mappings
-		erase_mappings_to_dram(dst_pgd, vma->vm_start, vma->vm_end);
-	}
-	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) != 0) {
-			continue;
-		}
+		erase_mappings(dst_pgd, vma->vm_start, vma->vm_end);
 		sync_dram_pages(dst_pgd, src_pgd, vma->vm_start, vma->vm_end,
 				vma);
 	}
@@ -555,7 +621,6 @@ static bool verify_pml4_kernel_map(pgd_t *mm_pgd, pgd_t *ctx_pgd)
 
 static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 {
-	// Also replaces page table structures
 	uint64_t addr;
 	pgd_t *e4;
 	pud_t *t3 = NULL;
@@ -564,85 +629,73 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 	pmd_t *e2;
 	pte_t *t1 = NULL;
 	pte_t *e1;
-	uint64_t page_paddr;
-	int i1 = -1, i2 = -1, i3 = -1, i4 = -1;
+	void *page_vaddr;
+	pr_ndckpt("[0x%016llX, 0x%016llX) of pgd@0x%016llx\n", start, end,
+		  (uint64_t)t4);
 	for (addr = start; addr < end;) {
-		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
-			i4 = PADDR_TO_IDX_IN_PML4(addr);
-			e4 = &t4[i4];
-			if ((e4->pgd & _PAGE_PRESENT) == 0) {
-				addr += PGDIR_SIZE;
-				continue;
-			}
-			t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
-			if (!ndckpt_is_virt_addr_in_nvdimm(t3)) {
-				replace_pdpt_with_nvdimm_page(e4);
-				ndckpt_invlpg((void *)addr);
-				i4 = -1;
-				continue;
-			}
-		}
-		if (i3 != PADDR_TO_IDX_IN_PDPT(addr)) {
-			i3 = PADDR_TO_IDX_IN_PDPT(addr);
-			e3 = &t3[i3];
-			if ((e3->pud & _PAGE_PRESENT) == 0) {
-				addr += PUD_SIZE;
-				continue;
-			}
-			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
-			if (!ndckpt_is_virt_addr_in_nvdimm(t2)) {
-				replace_pd_with_nvdimm_page(e3);
-				ndckpt_invlpg((void *)addr);
-				i3 = -1;
-				continue;
-			}
-		}
-		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
-			i2 = PADDR_TO_IDX_IN_PD(addr);
-			e2 = &t2[i2];
-			if ((e2->pmd & _PAGE_PRESENT) == 0) {
-				addr += PMD_SIZE;
-				continue;
-			}
-			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
-			if (!ndckpt_is_virt_addr_in_nvdimm(t1)) {
-				replace_pt_with_nvdimm_page(e2);
-				ndckpt_invlpg((void *)addr);
-				i2 = -1;
-				continue;
-			}
-		}
-		i1 = PADDR_TO_IDX_IN_PT(addr);
-		e1 = &t1[i1];
-		if ((e1->pte & _PAGE_PRESENT) == 0) {
-			addr += PAGE_SIZE;
+		traverse_pml4e(addr, t4, &e4, &t3);
+		if (!t3) {
+			addr = next_pml4e_addr(addr);
 			continue;
 		}
-		page_paddr = e1->pte & PTE_PFN_MASK;
-		if (!ndckpt_is_phys_addr_in_nvdimm(page_paddr)) {
-			replace_page_with_nvdimm_page(e1);
+		if (!ndckpt_is_virt_addr_in_nvdimm(t3)) {
+			replace_pdpt_with_nvdimm_page(e4);
 			ndckpt_invlpg((void *)addr);
 			continue;
 		}
-		addr += PAGE_SIZE;
+		traverse_pdpte(addr, t3, &e3, &t2);
+		if (!t2) {
+			addr = next_pdpte_addr(addr);
+			continue;
+		}
+		if (!ndckpt_is_virt_addr_in_nvdimm(t2)) {
+			replace_pd_with_nvdimm_page(e3);
+			ndckpt_invlpg((void *)addr);
+			continue;
+		}
+		traverse_pde(addr, t2, &e2, &t1);
+		if (!t1) {
+			addr = next_pde_addr(addr);
+			continue;
+		}
+		if (!ndckpt_is_virt_addr_in_nvdimm(t1)) {
+			replace_pt_with_nvdimm_page(e2);
+			ndckpt_invlpg((void *)addr);
+			continue;
+		}
+		traverse_pte(addr, t1, &e1, &page_vaddr);
+		if (!page_vaddr) {
+			addr = next_pte_addr(addr);
+			continue;
+		}
+		printk("checking addr=%016llx\n", addr);
+		if (!ndckpt_is_virt_addr_in_nvdimm(page_vaddr)) {
+			printk("replaced! addr=%016llx\n", addr);
+			replace_page_with_nvdimm_page(e1);
+			ndckpt_invlpg((void *)addr);
+		}
+		addr = next_pte_addr(addr);
 	}
+	ndckpt_sfence();
+	pr_ndckpt_flush("SFENCE() done\n");
+	pr_ndckpt_pgtable_range(t4, start, end);
 }
 
 static void
 replace_stack_pages_with_nvdimm(struct PersistentMemoryManager *pman,
 				pgd_t *pgd, struct vm_area_struct *vma)
 {
-	pr_ndckpt("Replacing stack vma [0x%016lX - 0x%016lX) with NVDIMM...\n",
+	pr_ndckpt("Replacing vma [0x%016lX - 0x%016lX) with NVDIMM...\n",
 		  vma->vm_start, vma->vm_end);
 	replace_pages_with_nvdimm(pgd, vma->vm_start, vma->vm_end);
 }
 
 static void mark_target_vmas(struct mm_struct *mm)
 {
-	struct vm_area_struct *vma = mm->mmap;
+	struct vm_area_struct *vma;
 	pr_ndckpt("mm->brk = 0x%016llX\n", (uint64_t)mm->brk);
 	pr_ndckpt("mm->start_brk = 0x%016llX\n", (uint64_t)mm->start_brk);
-	while (vma) {
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 		pr_ndckpt("vma@0x%016llX [0x%016llX - 0x%016llX] 0x%016llX\n",
 			  (uint64_t)vma, (uint64_t)vma->vm_start,
 			  (uint64_t)vma->vm_end, (uint64_t)vma->vm_flags);
@@ -650,16 +703,28 @@ static void mark_target_vmas(struct mm_struct *mm)
 		if ((vma->vm_flags & VM_WRITE) == 0) {
 			// No need to save readonly vma.
 			pr_ndckpt("  This vma is readonly. skip.\n");
-		} else if (vma->vm_start <= mm->brk &&
-			   vma->vm_end >= mm->start_brk) {
-			pr_ndckpt("  This is heap vma. Set VM_CKPT_TARGET.\n");
-			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
-		} else if (vma->vm_start <= mm->start_stack &&
-			   mm->start_stack <= vma->vm_end) {
-			pr_ndckpt("  This is stack vma. Set VM_CKPT_TARGET.\n");
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			continue;
 		}
-		vma = vma->vm_next;
+		/*
+    if(vma->vm_flags & ) {
+			pr_ndckpt("  This is data vma.\n");
+      pr_ndckpt_pgtable_range(mm->pgd, vma->vm_start, vma->vm_end);
+      continue;
+    }
+    */
+		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
+			pr_ndckpt("  This is heap vma.\n");
+			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			continue;
+		}
+		if (vma->vm_start <= mm->start_stack &&
+		    mm->start_stack <= vma->vm_end) {
+			pr_ndckpt("  This is stack vma.\n");
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			continue;
+		}
+		pr_ndckpt("  This is UNKNOWN vma but writable.\n");
+		pr_ndckpt_pgtable_range(mm->pgd, vma->vm_start, vma->vm_end);
 	}
 }
 
@@ -667,11 +732,14 @@ static void fix_dram_part_of_ctx(struct mm_struct *mm,
 				 struct PersistentProcessInfo *pproc, int idx)
 {
 	// This funcion fixes dram mappings of ctx to match with given mm.
+	// mm should be an original pgd on DRAM.
+	BUG_ON(ndckpt_is_virt_addr_in_nvdimm(mm->pgd));
 	copy_pml4_kernel_map(pproc->ctx[idx].pgd, mm->pgd);
 	sync_normal_vmas(mm, pproc->ctx[idx].pgd, mm->pgd);
 }
 
-static void fix_pmem_part_of_ctx(struct PersistentMemoryManager *pman, struct mm_struct *mm,
+static void fix_pmem_part_of_ctx(struct PersistentMemoryManager *pman,
+				 struct mm_struct *mm,
 				 struct PersistentProcessInfo *pproc, int idx)
 {
 	struct vm_area_struct *vma;
@@ -679,7 +747,7 @@ static void fix_pmem_part_of_ctx(struct PersistentMemoryManager *pman, struct mm
 		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
 			continue;
 		}
-	  replace_stack_pages_with_nvdimm(pman, pproc->ctx[idx].pgd, vma);
+		replace_stack_pages_with_nvdimm(pman, pproc->ctx[idx].pgd, vma);
 	}
 }
 
@@ -687,7 +755,6 @@ int64_t pproc_init(struct task_struct *target,
 		   struct PersistentMemoryManager *pman, struct mm_struct *mm,
 		   struct pt_regs *regs)
 {
-	struct vm_area_struct *vma;
 	pgd_t *pgd_ctx0;
 	pgd_t *pgd_ctx1;
 	struct PersistentProcessInfo *pproc = pproc_alloc();
@@ -739,8 +806,8 @@ int64_t pproc_restore(struct PersistentMemoryManager *pman,
 
 	fix_pmem_part_of_ctx(pman, mm, pproc, 0);
 	fix_pmem_part_of_ctx(pman, mm, pproc, 1);
-	//fix_dram_part_of_ctx(mm, pproc, 0);
-	//fix_dram_part_of_ctx(mm, pproc, 1);
+	fix_dram_part_of_ctx(mm, pproc, 0);
+	fix_dram_part_of_ctx(mm, pproc, 1);
 	pproc_set_vma_range(pproc, mm, 0);
 	pproc_set_vma_range(pproc, mm, 1);
 

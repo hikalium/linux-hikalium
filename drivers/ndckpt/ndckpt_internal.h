@@ -167,6 +167,23 @@ static inline void traverse_pte(uint64_t addr, pte_t *t1, pte_t **e1, void **t0)
 	*t0 = ndckpt_p2v((*e1)->pte & PTE_PFN_MASK);
 }
 
+static inline uint64_t next_pml4e_addr(uint64_t addr)
+{
+	return (addr + PGDIR_SIZE) & PGDIR_MASK;
+}
+static inline uint64_t next_pdpte_addr(uint64_t addr)
+{
+	return (addr + PUD_SIZE) & PUD_MASK;
+}
+static inline uint64_t next_pde_addr(uint64_t addr)
+{
+	return (addr + PMD_SIZE) & PMD_MASK;
+}
+static inline uint64_t next_pte_addr(uint64_t addr)
+{
+	return (addr + PAGE_SIZE) & PAGE_MASK;
+}
+
 static inline void replace_pdpt_with_nvdimm_page(pgd_t *ent_of_page)
 {
 	void *old_page_vaddr = (void *)ndckpt_pgd_page_vaddr(*ent_of_page);
@@ -208,7 +225,6 @@ static inline void replace_page_with_nvdimm_page(pte_t *ent_of_page)
 }
 
 void ndckpt_print_pml4(pgd_t *pgd);
-void erase_mappings_to_dram(pgd_t *t4, uint64_t start, uint64_t end);
 void pr_ndckpt_pml4(pgd_t *pgd);
 void pr_ndckpt_pgtable_range(pgd_t *t4, uint64_t start, uint64_t end);
 

@@ -201,7 +201,6 @@ void ndckpt__pte_alloc(struct vm_fault *vmf)
 	/* No need to invalidate - it was non-present before */
 	*vmf->pte = pte;
 	ndckpt_clwb(vmf->pte);
-	update_mmu_cache(vmf->vma, vmf->address, vmf->pte);
 }
 EXPORT_SYMBOL(ndckpt__pte_alloc);
 
