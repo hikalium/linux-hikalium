@@ -269,6 +269,10 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		if (!dst_t3 || !ndckpt_is_virt_addr_in_nvdimm(dst_t3)) {
 			// Alloc
 			tmp_page_addr = ndckpt_alloc_zeroed_page();
+			if (dst_t3) {
+				memcpy(tmp_page_addr, dst_t3, PAGE_SIZE);
+				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
+			}
 			*(p4d_t *)dst_e4 =
 				__p4d(_PAGE_TABLE |
 				      ndckpt_virt_to_phys(tmp_page_addr));
@@ -286,6 +290,10 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		if (!dst_t2 || !ndckpt_is_virt_addr_in_nvdimm(dst_t2)) {
 			// Alloc
 			tmp_page_addr = ndckpt_alloc_zeroed_page();
+			if (dst_t2) {
+				memcpy(tmp_page_addr, dst_t2, PAGE_SIZE);
+				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
+			}
 			*dst_e3 = __pud(_PAGE_TABLE |
 					ndckpt_virt_to_phys(tmp_page_addr));
 			ndckpt_clwb(dst_e3);
@@ -318,15 +326,14 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 			continue;
 		}
 		// Remap leaf page
-		*dst_e1 = pfn_pte(PHYS_PFN(ndckpt_v2p(src_page_vaddr)),
-				  dst_vma->vm_page_prot);
+		*dst_e1 = *src_e1;
 		ndckpt_clwb(dst_e1);
-		update_mmu_cache(dst_vma, dst_start + ofs, dst_e1);
 		ndckpt_invlpg(dst_page_vaddr);
 		// Clear old mapping
 		src_e1->pte = 0;
 		ndckpt_clwb(src_e1);
 		ndckpt_invlpg(src_page_vaddr);
+		ndckpt_invlpg((void *)(dst_start + ofs));
 
 		ofs += PAGE_SIZE;
 	}

@@ -653,7 +653,7 @@ static void mark_target_vmas(struct mm_struct *mm)
 		} else if (vma->vm_start <= mm->brk &&
 			   vma->vm_end >= mm->start_brk) {
 			pr_ndckpt("  This is heap vma. Set VM_CKPT_TARGET.\n");
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 		} else if (vma->vm_start <= mm->start_stack &&
 			   mm->start_stack <= vma->vm_end) {
 			pr_ndckpt("  This is stack vma. Set VM_CKPT_TARGET.\n");
@@ -669,6 +669,18 @@ static void fix_dram_part_of_ctx(struct mm_struct *mm,
 	// This funcion fixes dram mappings of ctx to match with given mm.
 	copy_pml4_kernel_map(pproc->ctx[idx].pgd, mm->pgd);
 	sync_normal_vmas(mm, pproc->ctx[idx].pgd, mm->pgd);
+}
+
+static void fix_pmem_part_of_ctx(struct PersistentMemoryManager *pman, struct mm_struct *mm,
+				 struct PersistentProcessInfo *pproc, int idx)
+{
+	struct vm_area_struct *vma;
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
+			continue;
+		}
+	  replace_stack_pages_with_nvdimm(pman, pproc->ctx[idx].pgd, vma);
+	}
 }
 
 int64_t pproc_init(struct task_struct *target,
@@ -693,13 +705,9 @@ int64_t pproc_init(struct task_struct *target,
 	// Setup non-volatile part of ctx0
 	memcpy(pgd_ctx0, mm->pgd, PAGE_SIZE);
 	ndckpt_clwb_range(pgd_ctx0, PAGE_SIZE);
-	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if (vma->vm_start <= mm->start_stack &&
-		    mm->start_stack <= vma->vm_end) {
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
-			replace_stack_pages_with_nvdimm(pman, pgd_ctx0, vma);
-		}
-	}
+	memcpy(pgd_ctx1, mm->pgd, PAGE_SIZE);
+	ndckpt_clwb_range(pgd_ctx1, PAGE_SIZE);
+
 	pproc_set_regs(pproc, 0, regs);
 	pproc_set_valid_ctx(pproc, 0); // dummy
 
@@ -729,8 +737,10 @@ int64_t pproc_restore(struct PersistentMemoryManager *pman,
 	pproc->org_pgd = mm->pgd;
 	mark_target_vmas(mm);
 
-	fix_dram_part_of_ctx(mm, pproc, 0);
-	fix_dram_part_of_ctx(mm, pproc, 1);
+	fix_pmem_part_of_ctx(pman, mm, pproc, 0);
+	fix_pmem_part_of_ctx(pman, mm, pproc, 1);
+	//fix_dram_part_of_ctx(mm, pproc, 0);
+	//fix_dram_part_of_ctx(mm, pproc, 1);
 	pproc_set_vma_range(pproc, mm, 0);
 	pproc_set_vma_range(pproc, mm, 1);
 
