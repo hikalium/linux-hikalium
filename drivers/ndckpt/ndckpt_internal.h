@@ -184,6 +184,12 @@ static inline uint64_t next_pte_addr(uint64_t addr)
 	return (addr + PAGE_SIZE) & PAGE_MASK;
 }
 
+static inline void unmap_pdpt_and_clwb(pgd_t *ent_of_page)
+{
+	ent_of_page->pgd = 0;
+	ndckpt_clwb(ent_of_page);
+}
+
 static inline void replace_pdpt_with_nvdimm_page(pgd_t *ent_of_page)
 {
 	void *old_page_vaddr = (void *)ndckpt_pgd_page_vaddr(*ent_of_page);
@@ -191,6 +197,12 @@ static inline void replace_pdpt_with_nvdimm_page(pgd_t *ent_of_page)
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
 	ent_of_page->pgd = (ent_of_page->pgd & ~PTE_PFN_MASK) | new_page_paddr;
+	ndckpt_clwb(ent_of_page);
+}
+
+static inline void unmap_pd_and_clwb(pud_t *ent_of_page)
+{
+	ent_of_page->pud = 0;
 	ndckpt_clwb(ent_of_page);
 }
 
@@ -204,6 +216,12 @@ static inline void replace_pd_with_nvdimm_page(pud_t *ent_of_page)
 	ndckpt_clwb(ent_of_page);
 }
 
+static inline void unmap_pt_and_clwb(pmd_t *ent_of_page)
+{
+	ent_of_page->pmd = 0;
+	ndckpt_clwb(ent_of_page);
+}
+
 static inline void replace_pt_with_nvdimm_page(pmd_t *ent_of_page)
 {
 	void *old_page_vaddr = (void *)ndckpt_pmd_page_vaddr(*ent_of_page);
@@ -211,6 +229,12 @@ static inline void replace_pt_with_nvdimm_page(pmd_t *ent_of_page)
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
 	ent_of_page->pmd = (ent_of_page->pmd & ~PTE_PFN_MASK) | new_page_paddr;
+	ndckpt_clwb(ent_of_page);
+}
+
+static inline void unmap_page_and_clwb(pte_t *ent_of_page)
+{
+	ent_of_page->pte = 0;
 	ndckpt_clwb(ent_of_page);
 }
 

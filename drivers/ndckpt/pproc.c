@@ -306,6 +306,7 @@ static void sync_nvdimm_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
 	ndckpt_sfence();
 }
 
+//#define DEBUG_SYNC_DRAM_PAGES
 static void sync_dram_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
 			    uint64_t end, struct vm_area_struct *vma)
 {
@@ -333,10 +334,12 @@ static void sync_dram_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
 
 	int count = 0;
 
+#ifdef DEBUG_SYNC_DRAM_PAGES
 	pr_ndckpt("sync src");
 	pr_ndckpt_pgtable_range(src_t4, start, end);
 	pr_ndckpt("begin");
 	pr_ndckpt_pgtable_range(dst_t4, start, end);
+#endif
 
 	for (addr = start; addr < end;) {
 		traverse_pml4e(addr, src_t4, &src_e4, &src_t3);
@@ -394,11 +397,14 @@ static void sync_dram_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
 		addr = next_pte_addr(addr);
 	}
 	ndckpt_sfence();
+#ifdef DEBUG_SYNC_DRAM_PAGES
 	pr_ndckpt("after");
 	pr_ndckpt_pgtable_range(dst_t4, start, end);
 	pr_ndckpt("end count=%d\n", count);
+#endif
 }
 
+//#define DEBUG_FLUSH_DIRTY_PAGES
 static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
 {
 	uint64_t addr;
@@ -411,9 +417,10 @@ static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
 	pte_t *e1;
 	void *page_vaddr;
 	uint64_t page_paddr;
+#ifdef DEBUG_FLUSH_DIRTY_PAGES
 	pr_ndckpt_pgtable_range(t4, start, end);
-	pr_ndckpt_flush("flush_dirty_pages: [0x%016llX, 0x%016llX)\n", start,
-			end);
+	pr_ndckpt("flush_dirty_pages: [0x%016llX, 0x%016llX)\n", start, end);
+#endif
 	BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(t4));
 	for (addr = start; addr < end;) {
 		traverse_pml4e(addr, t4, &e4, &t3);
@@ -448,16 +455,17 @@ static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
 		ndckpt_clwb_range(page_vaddr, PAGE_SIZE);
 		e1->pte &= ~(uint64_t)_PAGE_DIRTY;
 		ndckpt_clwb(&e1->pte);
-		pr_ndckpt_flush(
-			"flushed dirty page @ 0x%016llX v->p 0x%016llX\n", addr,
-			page_paddr);
+#ifdef DEBUG_FLUSH_DIRTY_PAGES
+		pr_ndckpt("flushed dirty page @ 0x%016llX v->p 0x%016llX\n",
+			  addr, page_paddr);
+#endif
 		addr = next_pte_addr(addr);
 	}
 	ndckpt_sfence();
-	pr_ndckpt_flush("SFENCE() done\n");
 }
 
-static void erase_mappings(pgd_t *t4, uint64_t start, uint64_t end)
+//#define DEBUG_ERASE_DRAM_MAPPINGS
+static void erase_dram_mappings(pgd_t *t4, uint64_t start, uint64_t end)
 {
 	// This only erase entry on NVDIMM to avoid SEGV after reboot.
 	uint64_t addr;
@@ -469,41 +477,43 @@ static void erase_mappings(pgd_t *t4, uint64_t start, uint64_t end)
 	pte_t *t1 = NULL;
 	pte_t *e1;
 	void *page_vaddr;
+#ifdef DEBUG_ERASE_DRAM_MAPPINGS
 	pr_ndckpt("[0x%016llX, 0x%016llX)\n", start, end);
 	pr_ndckpt("begin");
 	pr_ndckpt_pgtable_range(t4, start, end);
+#endif
 	BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(t4));
 	for (addr = start; addr < end;) {
 		traverse_pml4e(addr, t4, &e4, &t3);
-		if (!t3 || !ndckpt_is_virt_addr_in_nvdimm(t3)) {
+		if (!ndckpt_is_virt_addr_in_nvdimm(t3)) {
+			unmap_pdpt_and_clwb(e4);
 			addr = next_pml4e_addr(addr);
 			continue;
 		}
 		traverse_pdpte(addr, t3, &e3, &t2);
-		if (!t2 || !ndckpt_is_virt_addr_in_nvdimm(t2)) {
+		if (!ndckpt_is_virt_addr_in_nvdimm(t2)) {
+			unmap_pd_and_clwb(e3);
 			addr = next_pdpte_addr(addr);
 			continue;
 		}
 		traverse_pde(addr, t2, &e2, &t1);
-		if (!t1 || !ndckpt_is_virt_addr_in_nvdimm(t1)) {
+		if (!ndckpt_is_virt_addr_in_nvdimm(t1)) {
+			unmap_pt_and_clwb(e2);
 			addr = next_pde_addr(addr);
 			continue;
 		}
 		traverse_pte(addr, t1, &e1, &page_vaddr);
-		if (!page_vaddr) {
-			addr = next_pte_addr(addr);
-			continue;
+		if (!ndckpt_is_virt_addr_in_nvdimm(page_vaddr)) {
+			unmap_page_and_clwb(e1);
 		}
-		BUG_ON(ndckpt_is_virt_addr_in_nvdimm(page_vaddr));
-		e1->pte = 0;
-		ndckpt_clwb(&e1->pte);
 		addr = next_pte_addr(addr);
 	}
 	ndckpt_sfence();
-	pr_ndckpt_flush("SFENCE() done\n");
+#ifdef DEBUG_ERASE_DRAM_MAPPINGS
 	pr_ndckpt("after");
 	pr_ndckpt_pgtable_range(t4, start, end);
 	pr_ndckpt("end");
+#endif
 }
 
 static void flush_target_vmas(struct mm_struct *mm)
@@ -533,12 +543,14 @@ static void sync_target_vmas(struct mm_struct *mm, pgd_t *dst_pgd,
 static void sync_normal_vmas(struct mm_struct *mm, pgd_t *dst_pgd,
 			     pgd_t *src_pgd)
 {
+	// Remove dram mappings for Lower half of mapping (for user space)
+	// Upper half of mapping for kernel is replaced in copy_pml4_kernel_map
 	struct vm_area_struct *vma;
+	erase_dram_mappings(dst_pgd, 0, 1ULL << 47);
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) != 0) {
 			continue;
 		}
-		erase_mappings(dst_pgd, vma->vm_start, vma->vm_end);
 		sync_dram_pages(dst_pgd, src_pgd, vma->vm_start, vma->vm_end,
 				vma);
 	}
@@ -714,7 +726,7 @@ static void mark_target_vmas(struct mm_struct *mm)
     */
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
 			pr_ndckpt("  This is heap vma.\n");
-			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		if (vma->vm_start <= mm->start_stack &&
@@ -748,6 +760,18 @@ static void fix_pmem_part_of_ctx(struct PersistentMemoryManager *pman,
 			continue;
 		}
 		replace_stack_pages_with_nvdimm(pman, pproc->ctx[idx].pgd, vma);
+	}
+}
+
+static void print_target_vma_mapping(struct mm_struct *mm)
+{
+	struct vm_area_struct *vma;
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
+			continue;
+		}
+		pr_ndckpt_vma(vma);
+		pr_ndckpt_pgtable_range(mm->pgd, vma->vm_start, vma->vm_end);
 	}
 }
 
@@ -825,6 +849,7 @@ int64_t pproc_restore(struct PersistentMemoryManager *pman,
 	pr_ndckpt_pml4(mm->pgd);
 	pr_ndckpt_pml4(pproc->ctx[0].pgd);
 	pr_ndckpt_pml4(pproc->ctx[1].pgd);
+	print_target_vma_mapping(mm);
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[0].pgd, mm->pgd));
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[1].pgd, mm->pgd));
 	return regs->ax;

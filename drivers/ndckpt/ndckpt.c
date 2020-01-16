@@ -194,13 +194,14 @@ void ndckpt__pte_alloc(struct vm_fault *vmf)
 	// Alloc leaf pages
 	pte_t pte;
 	uint64_t paddr;
-	paddr = ndckpt_alloc_phys_page();
-	pr_ndckpt_pgalloc("paddr=0x%08llX\n", paddr);
+	paddr = ndckpt_virt_to_phys(ndckpt_alloc_zeroed_page());
+	//pr_ndckpt("PMEM page mapped: 0x%016lX -> 0x%016llX\n", vmf->address, paddr);
 	// https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L2965
 	pte = pfn_pte(PHYS_PFN(paddr), vmf->vma->vm_page_prot);
 	/* No need to invalidate - it was non-present before */
 	*vmf->pte = pte;
 	ndckpt_clwb(vmf->pte);
+	ndckpt_invlpg((void *)vmf->address);
 }
 EXPORT_SYMBOL(ndckpt__pte_alloc);
 
