@@ -128,14 +128,29 @@ static inline void *ndckpt_p2v(uint64_t p)
 #define TABLE_STATE_Tn 2
 #define TABLE_STATE_Tv 3
 
-static inline int table_state_pml4e(pgd_t *e)
+static inline int table_state(uint64_t ev)
 {
-	if ((e->pgd & _PAGE_PRESENT) == 0) {
+	if ((ev & _PAGE_PRESENT) == 0) {
 		return TABLE_STATE_X;
 	}
-	return ndckpt_is_phys_addr_in_nvdimm(e->pgd & PTE_PFN_MASK) ?
+	return ndckpt_is_phys_addr_in_nvdimm(ev & PTE_PFN_MASK) ?
 		       TABLE_STATE_Tn :
 		       TABLE_STATE_Tv;
+}
+
+static inline int table_state_pml4e(pgd_t *e)
+{
+	return table_state(e->pgd);
+}
+
+static inline int table_state_pdpte(pud_t *e)
+{
+	return table_state(e->pud);
+}
+
+static inline int table_state_pde(pmd_t *e)
+{
+	return table_state(e->pmd);
 }
 
 static inline void traverse_pml4e(uint64_t addr, pgd_t *t4, pgd_t **e4,
@@ -214,7 +229,8 @@ static inline void map_zeroed_nvdimm_page_pdpt(pgd_t *ent_of_page)
 {
 	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
-	ent_of_page->pgd = (ent_of_page->pgd & ~PTE_PFN_MASK) | new_page_paddr;
+	ent_of_page->pgd = (ent_of_page->pgd & ~PTE_PFN_MASK) | new_page_paddr |
+			   _PAGE_PRESENT;
 	ndckpt_clwb(ent_of_page);
 }
 
@@ -235,6 +251,21 @@ static inline void unmap_pd_and_clwb(pud_t *ent_of_page)
 	ndckpt_clwb(ent_of_page);
 }
 
+static inline void copy_pdpte_and_clwb(pud_t *dst, pud_t *src)
+{
+	*dst = *src;
+	ndckpt_clwb(dst);
+}
+
+static inline void map_zeroed_nvdimm_page_pd(pud_t *ent_of_page)
+{
+	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
+	ent_of_page->pud = (ent_of_page->pud & ~PTE_PFN_MASK) | new_page_paddr |
+			   _PAGE_PRESENT;
+	ndckpt_clwb(ent_of_page);
+}
+
 static inline void replace_pd_with_nvdimm_page(pud_t *ent_of_page)
 {
 	void *old_page_vaddr = (void *)ndckpt_pud_page_vaddr(*ent_of_page);
@@ -248,6 +279,21 @@ static inline void replace_pd_with_nvdimm_page(pud_t *ent_of_page)
 static inline void unmap_pt_and_clwb(pmd_t *ent_of_page)
 {
 	ent_of_page->pmd = 0;
+	ndckpt_clwb(ent_of_page);
+}
+
+static inline void copy_pde_and_clwb(pmd_t *dst, pmd_t *src)
+{
+	*dst = *src;
+	ndckpt_clwb(dst);
+}
+
+static inline void map_zeroed_nvdimm_page_pt(pmd_t *ent_of_page)
+{
+	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
+	ent_of_page->pmd = (ent_of_page->pmd & ~PTE_PFN_MASK) | new_page_paddr |
+			   _PAGE_PRESENT;
 	ndckpt_clwb(ent_of_page);
 }
 
