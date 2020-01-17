@@ -589,157 +589,84 @@ static inline void switch_mm_context(struct task_struct *target,
 #endif
 
 static inline void sync_pages_pte(struct mm_struct *mm,
-				  struct vm_area_struct *vma, pte_t *t1,
-				  pte_t *ref_t1, uint64_t addr, uint64_t end)
+				  struct vm_area_struct *vma, pte_t *t,
+				  pte_t *ref_t, uint64_t addr, uint64_t end)
 {
 	while (addr < end) {
-		pte_t *e1;
-		void *page_vaddr;
-		pte_t *ref_e1;
-		void *ref_page_vaddr;
+		pte_t *e, *ref_e;
+		void *page_vaddr, *ref_page_vaddr;
+		uint8_t prev_state, next_state;
 
-		traverse_pte(addr, ref_t1, &ref_e1, &ref_page_vaddr);
-		traverse_pte(addr, t1, &e1, &page_vaddr);
+		traverse_pte(addr, ref_t, &ref_e, &ref_page_vaddr);
+		traverse_pte(addr, t, &e, &page_vaddr);
+		addr = next_pte_addr(addr);
+		prev_state = page_state_pte(e);
+		next_state = page_state_pte(ref_e);
+
+		if (prev_state == next_state && next_state != PAGE_STATE_Pnd) {
+			// (X, X) -> Not mapped
+			// (Pv, Pv) -> Shared. No need to sync
+			// (Pnc, Pnc) -> Clean. No need to sync
+		} else if (next_state == PAGE_STATE_X) {
+			unmap_page_and_clwb(e);
+		} else if (next_state == PAGE_STATE_Pv) {
+			unmap_page_and_clwb(e);
+			copy_pte_and_clwb(e, ref_e);
+		} else {
+			if (prev_state == PAGE_STATE_X ||
+			    prev_state == PAGE_STATE_Pv) {
+				map_zeroed_nvdimm_page_page(e);
+			}
+			memcpy(page_vaddr, ref_page_vaddr, PAGE_SIZE);
+			// Following bits are only referenced in the power cycle, so no need to flush
+			e->pte |= _PAGE_DIRTY;
+			ref_e->pte &= ~_PAGE_DIRTY;
+		}
 		addr = next_pte_addr(addr);
 	}
 }
 
-static inline void sync_pages_pde(struct mm_struct *mm,
-				  struct vm_area_struct *vma, pmd_t *t2,
-				  pmd_t *ref_t2, uint64_t addr, uint64_t end)
-{
-	while (addr < end) {
-		pmd_t *e2;
-		pte_t *t1 = NULL;
-		pmd_t *ref_e2;
-		pte_t *ref_t1 = NULL;
+#define table_state_not_changed(s) (s == 0b0000 || s == 0b1010 || s == 0b1111)
 
-		traverse_pde(addr, ref_t2, &ref_e2, &ref_t1);
-		traverse_pde(addr, t2, &e2, &t1);
-		if (table_state_pde(e2) == table_state_pde(ref_e2)) {
-			if (table_state_pde(e2) != TABLE_STATE_Tn) {
-				// Skip children because table is not existed or shared on DRAM
-				addr = next_pde_addr(addr);
-				continue;
-			}
-		} else {
-			// this table should be updated.
-			if (table_state_pde(ref_e2) == TABLE_STATE_X) {
-				unmap_pt_and_clwb(e2);
-				// Skip children because table is not existed
-				addr = next_pde_addr(addr);
-				continue;
-			}
-			if (table_state_pde(ref_e2) == TABLE_STATE_Tv) {
-				copy_pde_and_clwb(e2, ref_e2);
-				// Skip children because table is shared on DRAM
-				addr = next_pde_addr(addr);
-				continue;
-			}
-			ASSERT(table_state_pde(ref_e2) == TABLE_STATE_Tn);
-			map_zeroed_nvdimm_page_pt(e2);
-			// update
-			traverse_pde(addr, t2, &e2, &t1);
-		}
-		ASSERT(table_state_pde(e2) == TABLE_STATE_Tn);
-		sync_pages_pte(mm, vma, t1, ref_t1, addr,
-			       end < next_pde_addr(addr) ? end :
-							   next_pde_addr(addr));
-		addr = next_pde_addr(addr);
+#define def_sync_pages(ename, ctname, ttype, cttype, nextfunc)                     \
+	static inline void sync_pages_##ename(struct mm_struct *mm,                \
+					      struct vm_area_struct *vma,          \
+					      ttype *t, ttype *ref_t,              \
+					      uint64_t addr, uint64_t end)         \
+	{                                                                          \
+		while (addr < end) {                                               \
+			const uint64_t next_addr = next_##ename##_addr(addr);      \
+			ttype *e, *ref_e;                                          \
+			cttype *ct, *ref_ct;                                       \
+			uint8_t prev_state, next_state;                            \
+                                                                                   \
+			traverse_##ename(addr, ref_t, &ref_e, &ref_ct);            \
+			traverse_##ename(addr, t, &e, &ct);                        \
+			prev_state = table_state_##ename(e);                       \
+			next_state = table_state_##ename(ref_e);                   \
+                                                                                   \
+			if (prev_state ^ next_state) {                             \
+				if (next_state == TABLE_STATE_X) {                 \
+					unmap_##ctname##_and_clwb(e);              \
+				} else if (next_state == TABLE_STATE_Tv) {         \
+					copy_##ename##_and_clwb(e, ref_e);         \
+				} else {                                           \
+					/* ASSERT(next_state == TABLE_STATE_Tn);*/ \
+					map_zeroed_nvdimm_page_##ctname(e);        \
+					traverse_##ename(addr, t, &e, &ct);        \
+				}                                                  \
+			}                                                          \
+			if (next_state == TABLE_STATE_Tn) {                        \
+				nextfunc(mm, vma, ct, ref_ct, addr,                \
+					 end < next_addr ? end : next_addr);       \
+			}                                                          \
+			addr = next_addr;                                          \
+		}                                                                  \
 	}
-}
 
-static inline void sync_pages_pdpte(struct mm_struct *mm,
-				    struct vm_area_struct *vma, pud_t *t3,
-				    pud_t *ref_t3, uint64_t addr, uint64_t end)
-{
-	while (addr < end) {
-		pud_t *e3;
-		pmd_t *t2 = NULL;
-		pud_t *ref_e3;
-		pmd_t *ref_t2 = NULL;
-
-		traverse_pdpte(addr, ref_t3, &ref_e3, &ref_t2);
-		traverse_pdpte(addr, t3, &e3, &t2);
-		if (table_state_pdpte(e3) == table_state_pdpte(ref_e3)) {
-			if (table_state_pdpte(e3) != TABLE_STATE_Tn) {
-				// Skip children because table is not existed or shared on DRAM
-				addr = next_pdpte_addr(addr);
-				continue;
-			}
-		} else {
-			// this table should be updated.
-			if (table_state_pdpte(ref_e3) == TABLE_STATE_X) {
-				unmap_pd_and_clwb(e3);
-				// Skip children because table is not existed
-				addr = next_pdpte_addr(addr);
-				continue;
-			}
-			if (table_state_pdpte(ref_e3) == TABLE_STATE_Tv) {
-				copy_pdpte_and_clwb(e3, ref_e3);
-				// Skip children because table is shared on DRAM
-				addr = next_pdpte_addr(addr);
-				continue;
-			}
-			ASSERT(table_state_pdpte(ref_e3) == TABLE_STATE_Tn);
-			map_zeroed_nvdimm_page_pd(e3);
-			// update
-			traverse_pdpte(addr, t3, &e3, &t2);
-		}
-		ASSERT(table_state_pdpte(e3) == TABLE_STATE_Tn);
-		sync_pages_pde(mm, vma, t2, ref_t2, addr,
-			       end < next_pdpte_addr(addr) ?
-				       end :
-				       next_pdpte_addr(addr));
-		addr = next_pdpte_addr(addr);
-	}
-}
-
-static inline void sync_pages_pml4e(struct mm_struct *mm,
-				    struct vm_area_struct *vma, pgd_t *t4,
-				    pgd_t *ref_t4, uint64_t addr, uint64_t end)
-{
-	while (addr < end) {
-		pgd_t *e4;
-		pud_t *t3 = NULL;
-		pgd_t *ref_e4;
-		pud_t *ref_t3 = NULL;
-
-		traverse_pml4e(addr, ref_t4, &ref_e4, &ref_t3);
-		traverse_pml4e(addr, t4, &e4, &t3);
-		if (table_state_pml4e(e4) == table_state_pml4e(ref_e4)) {
-			if (table_state_pml4e(e4) != TABLE_STATE_Tn) {
-				// Skip children because table is not existed or shared on DRAM
-				addr = next_pml4e_addr(addr);
-				continue;
-			}
-		} else {
-			// this table should be updated.
-			if (table_state_pml4e(ref_e4) == TABLE_STATE_X) {
-				unmap_pdpt_and_clwb(e4);
-				// Skip children because table is not existed
-				addr = next_pml4e_addr(addr);
-				continue;
-			}
-			if (table_state_pml4e(ref_e4) == TABLE_STATE_Tv) {
-				copy_pml4e_and_clwb(e4, ref_e4);
-				// Skip children because table is shared on DRAM
-				addr = next_pml4e_addr(addr);
-				continue;
-			}
-			ASSERT(table_state_pml4e(ref_e4) == TABLE_STATE_Tn);
-			map_zeroed_nvdimm_page_pdpt(e4);
-			// update
-			traverse_pml4e(addr, t4, &e4, &t3);
-		}
-		ASSERT(table_state_pml4e(e4) == TABLE_STATE_Tn);
-		sync_pages_pdpte(mm, vma, t3, ref_t3, addr,
-				 end < next_pml4e_addr(addr) ?
-					 end :
-					 next_pml4e_addr(addr));
-		addr = next_pml4e_addr(addr);
-	}
-}
+def_sync_pages(pde, pt, pmd_t, pte_t, sync_pages_pte);
+def_sync_pages(pdpte, pd, pud_t, pmd_t, sync_pages_pde);
+def_sync_pages(pml4e, pdpt, pgd_t, pud_t, sync_pages_pdpte);
 
 static void sync_pages(struct mm_struct *mm, struct vm_area_struct *vma,
 		       pgd_t *t4, pgd_t *ref_t4, uint64_t start, uint64_t end)
