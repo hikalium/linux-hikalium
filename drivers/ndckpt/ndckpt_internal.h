@@ -124,6 +124,20 @@ static inline void *ndckpt_p2v(uint64_t p)
 						  __va(p);
 }
 
+#define TABLE_STATE_X 0
+#define TABLE_STATE_Tn 2
+#define TABLE_STATE_Tv 3
+
+static inline int table_state_pml4e(pgd_t *e)
+{
+	if ((e->pgd & _PAGE_PRESENT) == 0) {
+		return TABLE_STATE_X;
+	}
+	return ndckpt_is_phys_addr_in_nvdimm(e->pgd & PTE_PFN_MASK) ?
+		       TABLE_STATE_Tn :
+		       TABLE_STATE_Tv;
+}
+
 static inline void traverse_pml4e(uint64_t addr, pgd_t *t4, pgd_t **e4,
 				  pud_t **t3)
 {
@@ -190,12 +204,27 @@ static inline void unmap_pdpt_and_clwb(pgd_t *ent_of_page)
 	ndckpt_clwb(ent_of_page);
 }
 
+static inline void copy_pml4e_and_clwb(pgd_t *dst, pgd_t *src)
+{
+	*dst = *src;
+	ndckpt_clwb(dst);
+}
+
+static inline void map_zeroed_nvdimm_page_pdpt(pgd_t *ent_of_page)
+{
+	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
+	ent_of_page->pgd = (ent_of_page->pgd & ~PTE_PFN_MASK) | new_page_paddr;
+	ndckpt_clwb(ent_of_page);
+}
+
 static inline void replace_pdpt_with_nvdimm_page(pgd_t *ent_of_page)
 {
 	void *old_page_vaddr = (void *)ndckpt_pgd_page_vaddr(*ent_of_page);
 	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
-	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
+	if (old_page_vaddr)
+		memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
 	ent_of_page->pgd = (ent_of_page->pgd & ~PTE_PFN_MASK) | new_page_paddr;
 	ndckpt_clwb(ent_of_page);
 }

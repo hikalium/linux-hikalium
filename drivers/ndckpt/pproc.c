@@ -573,6 +573,150 @@ static inline void switch_mm_context(struct task_struct *target,
 		  (CR3_PCID_MASK & __read_cr3()) /* | CR3_NOFLUSH */);
 }
 
+/*
+   Pseudo code:
+   function sync_table(ent, ref_ent)
+   {
+   if(state(ent) == state(ref_ent)) {
+   if(is_pmem_table(ent))
+   sync_children(ent, ref_ent);
+   return;
+   }
+   if(state(ent) == Tn)
+   free(table_of(ent));
+   if(state(ref_ent) == X) {
+   unmap(ent);
+   } else if(state(ref_ent) == Tv) {
+   map(ent, table_of(ref_ent));
+   } else { // state(ref_ent)
+   table = alloc_zeroed_pmem_page();
+   if(state(ref_ent) == Tv)
+   copy_table(table, table_of(ref_ent));
+
+   }
+   switch(state(ref_ent)) {
+   case X:
+   unmap(ent);
+   return;
+   case Tv:
+   map(ent, table_of(ref_ent));
+   return;
+   case Tn:
+
+   }
+   }
+*/
+
+#define ASSERT(x)                                                              \
+	do {                                                                   \
+		if (x)                                                         \
+			break;                                                 \
+		printk(KERN_EMERG "### ASSERTION FAILED %s: %s: %d: %s\n",     \
+		       __FILE__, __func__, __LINE__, #x);                      \
+		dump_stack();                                                  \
+		BUG();                                                         \
+	} while (0)
+
+static inline void sync_pages_pdpte(struct mm_struct *mm,
+				    struct vm_area_struct *vma, pud_t *t3,
+				    pud_t *ref_t3, uint64_t addr, uint64_t end)
+{
+	pud_t *ref_e3;
+	pmd_t *ref_t2 = NULL;
+	pmd_t *ref_e2;
+	pte_t *ref_t1 = NULL;
+	pte_t *ref_e1;
+	void *ref_page_vaddr;
+	//
+	pud_t *e3;
+	pmd_t *t2 = NULL;
+	pmd_t *e2;
+	pte_t *t1 = NULL;
+	pte_t *e1;
+	void *page_vaddr;
+
+	while (addr < end) {
+		traverse_pdpte(addr, ref_t3, &ref_e3, &ref_t2);
+		traverse_pdpte(addr, t3, &e3, &t2);
+		addr = next_pdpte_addr(addr);
+		continue;
+
+		traverse_pde(addr, ref_t2, &ref_e2, &ref_t1);
+		traverse_pde(addr, t2, &e2, &t1);
+		addr = next_pde_addr(addr);
+		continue;
+
+		traverse_pte(addr, ref_t1, &ref_e1, &ref_page_vaddr);
+		traverse_pte(addr, t1, &e1, &page_vaddr);
+		addr = next_pte_addr(addr);
+	}
+}
+
+static inline void sync_pages_pml4e(struct mm_struct *mm,
+				    struct vm_area_struct *vma, pgd_t *t4,
+				    pgd_t *ref_t4, uint64_t addr, uint64_t end)
+{
+	pgd_t *ref_e4;
+	pud_t *ref_t3 = NULL;
+	//
+	pgd_t *e4;
+	pud_t *t3 = NULL;
+
+	while (addr < end) {
+		traverse_pml4e(addr, ref_t4, &ref_e4, &ref_t3);
+		traverse_pml4e(addr, t4, &e4, &t3);
+		if (table_state_pml4e(e4) == table_state_pml4e(ref_e4)) {
+			if (table_state_pml4e(e4) != TABLE_STATE_Tn) {
+				// Skip children because table is not existed or shared on DRAM
+				addr = next_pml4e_addr(addr);
+				continue;
+			}
+		} else {
+			// this table should be updated.
+			if (table_state_pml4e(ref_e4) == TABLE_STATE_X) {
+				unmap_pdpt_and_clwb(e4);
+				// Skip children because table is not existed
+				addr = next_pml4e_addr(addr);
+				continue;
+			}
+			if (table_state_pml4e(ref_e4) == TABLE_STATE_Tv) {
+				copy_pml4e_and_clwb(e4, ref_e4);
+				// Skip children because table is shared on DRAM
+				addr = next_pml4e_addr(addr);
+				continue;
+			}
+			ASSERT(table_state_pml4e(ref_e4) == TABLE_STATE_Tn);
+			map_zeroed_nvdimm_page_pdpt(e4);
+			// update
+			traverse_pml4e(addr, t4, &e4, &t3);
+		}
+		ASSERT(table_state_pml4e(e4) == TABLE_STATE_Tn);
+		sync_pages_pdpte(mm, vma, t3, ref_t3, addr,
+				 end < next_pml4e_addr(addr) ?
+					 end :
+					 next_pml4e_addr(addr));
+	}
+}
+
+static void sync_pages(struct mm_struct *mm, struct vm_area_struct *vma,
+		       pgd_t *t4, pgd_t *ref_t4, uint64_t start, uint64_t end)
+{
+	sync_pages_pml4e(mm, vma, t4, ref_t4, start, end);
+	ndckpt_sfence();
+}
+
+static void sync_vmas(struct mm_struct *mm, pgd_t *dst_pgd, pgd_t *src_pgd)
+{
+	struct vm_area_struct *vma;
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) != 0) {
+			continue;
+		}
+		sync_pages(mm, vma, dst_pgd, src_pgd, vma->vm_start,
+			   vma->vm_end);
+	}
+}
+
 void pproc_commit(struct task_struct *target,
 		  struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 		  struct pt_regs *regs)
@@ -596,6 +740,8 @@ void pproc_commit(struct task_struct *target,
 		       next_running_ctx_idx);
 	sync_target_vmas(mm, pproc->ctx[next_running_ctx_idx].pgd,
 			 pproc->ctx[prev_running_ctx_idx].pgd);
+	sync_vmas(mm, pproc->ctx[next_running_ctx_idx].pgd,
+		  pproc->ctx[prev_running_ctx_idx].pgd);
 	// Finally, switch the cr3 to the new running context's pgd.
 	switch_mm_context(target, mm, pproc->ctx[next_running_ctx_idx].pgd);
 	spin_unlock(&pproc->ckpt_lock);
@@ -717,22 +863,15 @@ static void mark_target_vmas(struct mm_struct *mm)
 			pr_ndckpt("  This vma is readonly. skip.\n");
 			continue;
 		}
-		/*
-    if(vma->vm_flags & ) {
-			pr_ndckpt("  This is data vma.\n");
-      pr_ndckpt_pgtable_range(mm->pgd, vma->vm_start, vma->vm_end);
-      continue;
-    }
-    */
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
 			pr_ndckpt("  This is heap vma.\n");
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		if (vma->vm_start <= mm->start_stack &&
 		    mm->start_stack <= vma->vm_end) {
 			pr_ndckpt("  This is stack vma.\n");
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		pr_ndckpt("  This is UNKNOWN vma but writable.\n");

@@ -114,10 +114,18 @@ static int do_ndckpt(struct task_struct *target)
 	return 0;
 }
 
+//#define DEBUG_NDCKPT_HANDLE_CHECKPOINT
 int ndckpt_handle_checkpoint(void)
 {
 	// This function should be called under the pt_regs is fully saved on the stack.
-	return do_ndckpt(current);
+#ifdef DEBUG_NDCKPT_HANDLE_CHECKPOINT
+	pr_ndckpt("begin\n");
+#endif
+	const int result = do_ndckpt(current);
+#ifdef DEBUG_NDCKPT_HANDLE_CHECKPOINT
+	pr_ndckpt("end\n");
+#endif
+	return result;
 }
 EXPORT_SYMBOL(ndckpt_handle_checkpoint);
 
