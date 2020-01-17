@@ -163,6 +163,7 @@ int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
 	pud_phys = ndckpt_virt_to_phys(new);
 	pr_ndckpt_pgalloc("vaddr: 0x%016llX\n", (uint64_t) new);
 	paravirt_alloc_pud(mm, pud_phys >> PAGE_SHIFT);
+	BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(p4d));
 	set_p4d(p4d, __p4d(_PAGE_TABLE | pud_phys));
 	ndckpt_clwb(p4d);
 	spin_unlock(&mm->page_table_lock);
@@ -190,6 +191,7 @@ int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address,
 	phys = ndckpt_virt_to_phys(new);
 	pr_ndckpt_pgalloc("vaddr: 0x%016llX\n", (uint64_t) new);
 	paravirt_alloc_pud(mm, phys >> PAGE_SHIFT);
+	BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(pud));
 	set_pud(pud, __pud(_PAGE_TABLE | phys));
 	ndckpt_clwb(pud);
 	spin_unlock(&mm->page_table_lock);
@@ -200,14 +202,14 @@ EXPORT_SYMBOL(ndckpt___pmd_alloc);
 void ndckpt__pte_alloc(struct vm_fault *vmf)
 {
 	// Alloc leaf pages
-	pte_t pte;
 	uint64_t paddr;
 	paddr = ndckpt_virt_to_phys(ndckpt_alloc_zeroed_page());
 	//pr_ndckpt("PMEM page mapped: 0x%016lX -> 0x%016llX\n", vmf->address, paddr);
 	// https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L2965
-	pte = pfn_pte(PHYS_PFN(paddr), vmf->vma->vm_page_prot);
 	/* No need to invalidate - it was non-present before */
-	*vmf->pte = pte;
+	// Make dirty to be populated in another context on next checkpoint
+	*vmf->pte = pfn_pte(PHYS_PFN(paddr), vmf->vma->vm_page_prot);
+	vmf->pte->pte |= _PAGE_DIRTY;
 	ndckpt_clwb(vmf->pte);
 	ndckpt_invlpg((void *)vmf->address);
 }
@@ -223,6 +225,7 @@ int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
 	}
 	smp_wmb(); /* Could be smp_wmb__xxx(before|after)_spin_lock */
 	if (likely(pmd_none(*pmd))) { /* Has another populated it ? */
+		//BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(pmd));
 		ndckpt_pmd_populate(mm, pmd,
 				    (pte_t *)ndckpt_alloc_zeroed_page());
 		ndckpt_clwb(pmd);

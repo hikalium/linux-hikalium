@@ -195,123 +195,10 @@ void pproc_printk(struct PersistentProcessInfo *pproc)
 	}
 }
 
-static void sync_nvdimm_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
-			      uint64_t end, struct vm_area_struct *vma)
-{
-	uint64_t addr;
-	//
-	pgd_t *src_e4;
-	pud_t *src_t3 = NULL;
-	pud_t *src_e3;
-	pmd_t *src_t2 = NULL;
-	pmd_t *src_e2;
-	pte_t *src_t1 = NULL;
-	pte_t *src_e1;
-	void *src_page_vaddr;
-	//
-	pgd_t *dst_e4;
-	pud_t *dst_t3 = NULL;
-	pud_t *dst_e3;
-	pmd_t *dst_t2 = NULL;
-	pmd_t *dst_e2;
-	pte_t *dst_t1 = NULL;
-	pte_t *dst_e1;
-	void *dst_page_vaddr;
-	//
-	void *tmp_page_addr;
-	for (addr = start; addr < end;) {
-		traverse_pml4e(addr, src_t4, &src_e4, &src_t3);
-		traverse_pml4e(addr, dst_t4, &dst_e4, &dst_t3);
-		if (!src_t3) {
-			addr = next_pml4e_addr(addr);
-			continue;
-		}
-		if (!dst_t3 || !ndckpt_is_virt_addr_in_nvdimm(dst_t3)) {
-			// Alloc
-			tmp_page_addr = ndckpt_alloc_zeroed_page();
-			if (dst_t3) {
-				memcpy(tmp_page_addr, dst_t3, PAGE_SIZE);
-				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
-			}
-			*(p4d_t *)dst_e4 =
-				__p4d(_PAGE_TABLE |
-				      ndckpt_virt_to_phys(tmp_page_addr));
-			ndckpt_clwb(dst_e4);
-			continue; // Retry
-		}
-		traverse_pdpte(addr, src_t3, &src_e3, &src_t2);
-		traverse_pdpte(addr, dst_t3, &dst_e3, &dst_t2);
-		if (!src_t2) {
-			addr = next_pdpte_addr(addr);
-			continue;
-		}
-		if (!dst_t2 || !ndckpt_is_virt_addr_in_nvdimm(dst_t2)) {
-			// Alloc
-			tmp_page_addr = ndckpt_alloc_zeroed_page();
-			if (dst_t2) {
-				memcpy(tmp_page_addr, dst_t2, PAGE_SIZE);
-				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
-			}
-			*dst_e3 = __pud(_PAGE_TABLE |
-					ndckpt_virt_to_phys(tmp_page_addr));
-			ndckpt_clwb(dst_e3);
-			continue; // Retry
-		}
-		traverse_pde(addr, src_t2, &src_e2, &src_t1);
-		traverse_pde(addr, dst_t2, &dst_e2, &dst_t1);
-		if (!src_t1) {
-			addr = next_pde_addr(addr);
-			continue;
-		}
-		if (!dst_t1 || !ndckpt_is_virt_addr_in_nvdimm(dst_t1)) {
-			// Alloc
-			tmp_page_addr = ndckpt_alloc_zeroed_page();
-			if (dst_t1) {
-				memcpy(tmp_page_addr, dst_t1, PAGE_SIZE);
-				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
-			}
-			*dst_e2 = __pmd(_PAGE_TABLE |
-					ndckpt_virt_to_phys(tmp_page_addr));
-			ndckpt_clwb(dst_e2);
-			continue; // Retry
-		}
-		traverse_pte(addr, src_t1, &src_e1, &src_page_vaddr);
-		traverse_pte(addr, dst_t1, &dst_e1, &dst_page_vaddr);
-		if (!src_page_vaddr) {
-			addr = next_pte_addr(addr);
-			continue;
-		}
-		if (!dst_page_vaddr ||
-		    !ndckpt_is_virt_addr_in_nvdimm(dst_page_vaddr)) {
-			// Alloc
-			tmp_page_addr = ndckpt_alloc_zeroed_page();
-			if (dst_page_vaddr) {
-				memcpy(tmp_page_addr, dst_page_vaddr,
-				       PAGE_SIZE);
-				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
-			}
-			*dst_e1 = pfn_pte(
-				PHYS_PFN(ndckpt_virt_to_phys(tmp_page_addr)),
-				vma->vm_page_prot);
-			ndckpt_clwb(dst_e1);
-			update_mmu_cache(vma, addr, dst_e1);
-			continue; // Retry
-		}
-		// TODO: Reduce copy with dirty flag
-		memcpy(dst_page_vaddr, src_page_vaddr, PAGE_SIZE);
-		// Do not clwb dst_pages at this time because dst will be running ctx
-		// and they will be flushed on the next checkpoint.
-		addr = next_pte_addr(addr);
-	}
-	ndckpt_sfence();
-}
-
 //#define DEBUG_SYNC_DRAM_PAGES
 static void sync_dram_pages(pgd_t *dst_t4, pgd_t *src_t4, uint64_t start,
 			    uint64_t end, struct vm_area_struct *vma)
 {
-	// Do sync_nvdimm_pages first to ensure
-	// the node which have child node on nvdimm is on nvdimm.
 	uint64_t addr;
 	//
 	pgd_t *src_e4;
@@ -527,19 +414,6 @@ static void flush_target_vmas(struct mm_struct *mm)
 	}
 }
 
-static void sync_target_vmas(struct mm_struct *mm, pgd_t *dst_pgd,
-			     pgd_t *src_pgd)
-{
-	struct vm_area_struct *vma;
-	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
-			continue;
-		}
-		sync_nvdimm_pages(dst_pgd, src_pgd, vma->vm_start, vma->vm_end,
-				  vma);
-	}
-}
-
 static void sync_normal_vmas(struct mm_struct *mm, pgd_t *dst_pgd,
 			     pgd_t *src_pgd)
 {
@@ -603,7 +477,8 @@ static inline void sync_pages_pte(struct mm_struct *mm,
 		prev_state = page_state_pte(e);
 		next_state = page_state_pte(ref_e);
 
-		if (prev_state == next_state && next_state != PAGE_STATE_Pnd) {
+		if (prev_state == next_state && next_state != PAGE_STATE_Pnd &&
+		    next_state != PAGE_STATE_Pnc) {
 			// (X, X) -> Not mapped
 			// (Pv, Pv) -> Shared. No need to sync
 			// (Pnc, Pnc) -> Clean. No need to sync
@@ -652,6 +527,8 @@ static inline void sync_pages_pte(struct mm_struct *mm,
 					copy_##ename##_and_clwb(e, ref_e);         \
 				} else {                                           \
 					/* ASSERT(next_state == TABLE_STATE_Tn);*/ \
+					BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(     \
+						e));                               \
 					map_zeroed_nvdimm_page_##ctname(e);        \
 					traverse_##ename(addr, t, &e, &ct);        \
 				}                                                  \
@@ -687,6 +564,9 @@ static void sync_vmas(struct mm_struct *mm, pgd_t *dst_pgd, pgd_t *src_pgd)
 	}
 }
 
+static void fix_pmem_part_of_ctx(struct mm_struct *mm,
+				 struct PersistentProcessInfo *pproc, int idx);
+
 void pproc_commit(struct task_struct *target,
 		  struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 		  struct pt_regs *regs)
@@ -700,6 +580,7 @@ void pproc_commit(struct task_struct *target,
 	}
 
 	pproc_set_regs(pproc, prev_running_ctx_idx, regs);
+	fix_pmem_part_of_ctx(mm, pproc, prev_running_ctx_idx);
 	flush_target_vmas(mm);
 	pproc_set_vma_range(pproc, mm, prev_running_ctx_idx);
 	pr_ndckpt_ckpt("Ctx #%d has been committed\n", prev_running_ctx_idx);
@@ -756,8 +637,10 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 	pte_t *t1 = NULL;
 	pte_t *e1;
 	void *page_vaddr;
+#ifdef DEBUG_REPLACE_PAGES_WITH_NVDIMM
 	pr_ndckpt("[0x%016llX, 0x%016llX) of pgd@0x%016llx\n", start, end,
 		  (uint64_t)t4);
+#endif
 	for (addr = start; addr < end;) {
 		traverse_pml4e(addr, t4, &e4, &t3);
 		if (!t3) {
@@ -794,26 +677,13 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 			addr = next_pte_addr(addr);
 			continue;
 		}
-		printk("checking addr=%016llx\n", addr);
 		if (!ndckpt_is_virt_addr_in_nvdimm(page_vaddr)) {
-			printk("replaced! addr=%016llx\n", addr);
 			replace_page_with_nvdimm_page(e1);
 			ndckpt_invlpg((void *)addr);
 		}
 		addr = next_pte_addr(addr);
 	}
 	ndckpt_sfence();
-	pr_ndckpt_flush("SFENCE() done\n");
-	pr_ndckpt_pgtable_range(t4, start, end);
-}
-
-static void
-replace_stack_pages_with_nvdimm(struct PersistentMemoryManager *pman,
-				pgd_t *pgd, struct vm_area_struct *vma)
-{
-	pr_ndckpt("Replacing vma [0x%016lX - 0x%016lX) with NVDIMM...\n",
-		  vma->vm_start, vma->vm_end);
-	replace_pages_with_nvdimm(pgd, vma->vm_start, vma->vm_end);
 }
 
 static void mark_target_vmas(struct mm_struct *mm)
@@ -833,13 +703,13 @@ static void mark_target_vmas(struct mm_struct *mm)
 		}
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
 			pr_ndckpt("  This is heap vma.\n");
-			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		if (vma->vm_start <= mm->start_stack &&
 		    mm->start_stack <= vma->vm_end) {
 			pr_ndckpt("  This is stack vma.\n");
-			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		pr_ndckpt("  This is UNKNOWN vma but writable.\n");
@@ -857,8 +727,7 @@ static void fix_dram_part_of_ctx(struct mm_struct *mm,
 	sync_normal_vmas(mm, pproc->ctx[idx].pgd, mm->pgd);
 }
 
-static void fix_pmem_part_of_ctx(struct PersistentMemoryManager *pman,
-				 struct mm_struct *mm,
+static void fix_pmem_part_of_ctx(struct mm_struct *mm,
 				 struct PersistentProcessInfo *pproc, int idx)
 {
 	struct vm_area_struct *vma;
@@ -866,7 +735,8 @@ static void fix_pmem_part_of_ctx(struct PersistentMemoryManager *pman,
 		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
 			continue;
 		}
-		replace_stack_pages_with_nvdimm(pman, pproc->ctx[idx].pgd, vma);
+		replace_pages_with_nvdimm(pproc->ctx[idx].pgd, vma->vm_start,
+					  vma->vm_end);
 	}
 }
 
@@ -935,8 +805,8 @@ int64_t pproc_restore(struct PersistentMemoryManager *pman,
 	pproc->org_pgd = mm->pgd;
 	mark_target_vmas(mm);
 
-	fix_pmem_part_of_ctx(pman, mm, pproc, 0);
-	fix_pmem_part_of_ctx(pman, mm, pproc, 1);
+	fix_pmem_part_of_ctx(mm, pproc, 0);
+	fix_pmem_part_of_ctx(mm, pproc, 1);
 	fix_dram_part_of_ctx(mm, pproc, 0);
 	fix_dram_part_of_ctx(mm, pproc, 1);
 	pproc_set_vma_range(pproc, mm, 0);
