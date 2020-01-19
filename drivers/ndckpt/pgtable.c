@@ -107,39 +107,37 @@ void pr_ndckpt_pgtable_range(pgd_t *t4, uint64_t start, uint64_t end)
 	uint64_t page_paddr;
 	int i1 = -1, i2 = -1, i3 = -1, i4 = -1;
 	for (addr = start; addr < end;) {
-		if (i4 != PADDR_TO_IDX_IN_PML4(addr)) {
-			i4 = PADDR_TO_IDX_IN_PML4(addr);
-			pr_ndckpt("PML4[0x%03X]\n", i4);
-			e4 = &t4[i4];
-			if ((e4->pgd & _PAGE_PRESENT) == 0) {
-				addr = next_pml4e_addr(addr);
-				continue;
-			}
-			t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
+		i4 = PADDR_TO_IDX_IN_PML4(addr);
+		e4 = &t4[i4];
+		pr_ndckpt("PML4[0x%03X]    @ 0x%016llX = 0x%016lX on %s\n", i4,
+			  ndckpt_v2p(e4), e4->pgd, get_str_dram_or_nvdimm(t4));
+		if ((e4->pgd & _PAGE_PRESENT) == 0) {
+			addr = next_pml4e_addr(addr);
+			continue;
 		}
-		if (i3 != PADDR_TO_IDX_IN_PDPT(addr)) {
-			i3 = PADDR_TO_IDX_IN_PDPT(addr);
-			pr_ndckpt(" PDPT[0x%03X]\n", i3);
-			e3 = &t3[i3];
-			if ((e3->pud & _PAGE_PRESENT) == 0) {
-				addr = next_pdpte_addr(addr);
-				continue;
-			}
-			t2 = (void *)ndckpt_pud_page_vaddr(*e3);
+		t3 = (void *)ndckpt_pgd_page_vaddr(*e4);
+		i3 = PADDR_TO_IDX_IN_PDPT(addr);
+		e3 = &t3[i3];
+		pr_ndckpt(" PDPT[0x%03X]   @ 0x%016llX = 0x%016lX on %s\n", i3,
+			  ndckpt_v2p(e3), e3->pud, get_str_dram_or_nvdimm(t3));
+		if ((e3->pud & _PAGE_PRESENT) == 0) {
+			addr = next_pdpte_addr(addr);
+			continue;
 		}
-		if (i2 != PADDR_TO_IDX_IN_PD(addr)) {
-			i2 = PADDR_TO_IDX_IN_PD(addr);
-			pr_ndckpt("  PD  [0x%03X]\n", i2);
-			e2 = &t2[i2];
-			if ((e2->pmd & _PAGE_PRESENT) == 0) {
-				addr = next_pde_addr(addr);
-				continue;
-			}
-			t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
+		t2 = (void *)ndckpt_pud_page_vaddr(*e3);
+		i2 = PADDR_TO_IDX_IN_PD(addr);
+		e2 = &t2[i2];
+		pr_ndckpt("  PD  [0x%03X]  @ 0x%016llX = 0x%016lX on %s\n", i2,
+			  ndckpt_v2p(e2), e2->pmd, get_str_dram_or_nvdimm(t2));
+		if ((e2->pmd & _PAGE_PRESENT) == 0) {
+			addr = next_pde_addr(addr);
+			continue;
 		}
+		t1 = (void *)ndckpt_pmd_page_vaddr(*e2);
 		i1 = PADDR_TO_IDX_IN_PT(addr);
-		pr_ndckpt("   PT  [0x%03X]\n", i1);
 		e1 = &t1[i1];
+		pr_ndckpt("   PT  [0x%03X] @ 0x%016llX = 0x%016lX on %s\n", i1,
+			  ndckpt_v2p(e1), e1->pte, get_str_dram_or_nvdimm(t1));
 		if ((e1->pte & _PAGE_PRESENT) == 0) {
 			addr = next_pte_addr(addr);
 			continue;
@@ -206,6 +204,8 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 				__p4d(_PAGE_TABLE |
 				      ndckpt_virt_to_phys(tmp_page_addr));
 			ndckpt_clwb(dst_e4);
+			ndckpt_invlpg((void *)(src_start + ofs));
+			ndckpt_invlpg((void *)(dst_start + ofs));
 			continue; // Retry
 		}
 		traverse_pdpte(src_start + ofs, src_t3, &src_e3, &src_t2);
@@ -224,6 +224,8 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 			*dst_e3 = __pud(_PAGE_TABLE |
 					ndckpt_virt_to_phys(tmp_page_addr));
 			ndckpt_clwb(dst_e3);
+			ndckpt_invlpg((void *)(src_start + ofs));
+			ndckpt_invlpg((void *)(dst_start + ofs));
 			continue; // Retry
 		}
 		traverse_pde(src_start + ofs, src_t2, &src_e2, &src_t1);
@@ -242,6 +244,8 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 			*dst_e2 = __pmd(_PAGE_TABLE |
 					ndckpt_virt_to_phys(tmp_page_addr));
 			ndckpt_clwb(dst_e2);
+			ndckpt_invlpg((void *)(src_start + ofs));
+			ndckpt_invlpg((void *)(dst_start + ofs));
 			continue; // Retry
 		}
 		traverse_pte(src_start + ofs, src_t1, &src_e1, &src_page_vaddr);
@@ -258,6 +262,7 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		src_e1->pte = 0;
 		ndckpt_clwb(src_e1);
 		ndckpt_invlpg(src_page_vaddr);
+		ndckpt_invlpg((void *)(src_start + ofs));
 		ndckpt_invlpg((void *)(dst_start + ofs));
 
 		ofs = next_pte_addr(src_start + ofs) - src_start;

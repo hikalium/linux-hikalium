@@ -143,6 +143,8 @@ static inline int table_state(uint64_t ev)
 #define PAGE_STATE_Pnc 6
 #define PAGE_STATE_Pnd 7
 
+#define IS_PAGE_STATE_ON_NVDIMM(s) (s == PAGE_STATE_Pnc || s == PAGE_STATE_Pnd)
+
 static inline int page_state(uint64_t ev)
 {
 	if ((ev & _PAGE_PRESENT) == 0) {
@@ -336,7 +338,7 @@ static inline void unmap_page_and_clwb(pte_t *ent_of_page)
 
 static inline void copy_pte_and_clwb(pte_t *dst, pte_t *src)
 {
-	*dst = *src;
+	dst->pte = src->pte;
 	ndckpt_clwb(dst);
 }
 

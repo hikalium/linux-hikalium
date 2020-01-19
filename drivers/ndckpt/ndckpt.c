@@ -149,10 +149,15 @@ int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
 	// Alloc PDPT (2nd page table structure)
 	pud_t *new;
 	uint64_t pud_phys;
+	if (!ndckpt_is_enabled_on_current()) {
+		return __pud_alloc(mm, p4d, address);
+	}
+	/*
 	if (!is_vma_ndckpt_target(vma)) {
 		// Alloc on DRAM
 		return __pud_alloc(mm, p4d, address);
 	}
+  */
 	// Alloc on NVDIMM
 	// https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L4017
 	new = ndckpt_alloc_zeroed_page();
@@ -177,10 +182,16 @@ int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address,
 	// Alloc PD (3rd page table structure)
 	pmd_t *new;
 	uint64_t phys;
+	if (!ndckpt_is_enabled_on_current()) {
+		// Alloc on DRAM
+		return __pmd_alloc(mm, pud, address);
+	}
+	/*
 	if (!is_vma_ndckpt_target(vma)) {
 		// Alloc on DRAM
 		return __pmd_alloc(mm, pud, address);
 	}
+  */
 	// Alloc on NVDIMM
 	// https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L4017
 	new = ndckpt_alloc_zeroed_page();
@@ -199,9 +210,35 @@ int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address,
 }
 EXPORT_SYMBOL(ndckpt___pmd_alloc);
 
+int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
+		       struct vm_area_struct *vma)
+{
+	// Alloc PT (4th page table structure)
+	if (!ndckpt_is_enabled_on_current()) {
+		// Alloc on DRAM
+		return __pte_alloc(mm, pmd);
+	}
+	/*
+	if (!is_vma_ndckpt_target(vma)) {
+		// Alloc on DRAM
+		return __pte_alloc(mm, pmd);
+	}
+  */
+	smp_wmb(); /* Could be smp_wmb__xxx(before|after)_spin_lock */
+	if (likely(pmd_none(*pmd))) { /* Has another populated it ? */
+		//BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(pmd));
+		ndckpt_pmd_populate(mm, pmd,
+				    (pte_t *)ndckpt_alloc_zeroed_page());
+		ndckpt_clwb(pmd);
+	}
+	return 0;
+}
+EXPORT_SYMBOL(ndckpt___pte_alloc);
+
 void ndckpt__pte_alloc(struct vm_fault *vmf)
 {
 	// Alloc leaf pages
+	// See handle_pte_fault_ndckpt() @ mm/memory.c
 	uint64_t paddr;
 	paddr = ndckpt_virt_to_phys(ndckpt_alloc_zeroed_page());
 	//pr_ndckpt("PMEM page mapped: 0x%016lX -> 0x%016llX\n", vmf->address, paddr);
@@ -214,25 +251,6 @@ void ndckpt__pte_alloc(struct vm_fault *vmf)
 	ndckpt_invlpg((void *)vmf->address);
 }
 EXPORT_SYMBOL(ndckpt__pte_alloc);
-
-int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
-		       struct vm_area_struct *vma)
-{
-	// Alloc PT (4th page table structure)
-	if (!is_vma_ndckpt_target(vma)) {
-		// Alloc on DRAM
-		return __pte_alloc(mm, pmd);
-	}
-	smp_wmb(); /* Could be smp_wmb__xxx(before|after)_spin_lock */
-	if (likely(pmd_none(*pmd))) { /* Has another populated it ? */
-		//BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(pmd));
-		ndckpt_pmd_populate(mm, pmd,
-				    (pte_t *)ndckpt_alloc_zeroed_page());
-		ndckpt_clwb(pmd);
-	}
-	return 0;
-}
-EXPORT_SYMBOL(ndckpt___pte_alloc);
 
 int ndckpt_do_ndckpt(struct task_struct *target)
 {

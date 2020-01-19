@@ -462,6 +462,7 @@ static inline void switch_mm_context(struct task_struct *target,
 #define ASSERT(x)
 #endif
 
+// #define DEBUG_SYNC_PAGES_PTE
 static inline void sync_pages_pte(struct mm_struct *mm,
 				  struct vm_area_struct *vma, pte_t *t,
 				  pte_t *ref_t, uint64_t addr, uint64_t end)
@@ -473,7 +474,6 @@ static inline void sync_pages_pte(struct mm_struct *mm,
 
 		traverse_pte(addr, ref_t, &ref_e, &ref_page_vaddr);
 		traverse_pte(addr, t, &e, &page_vaddr);
-		addr = next_pte_addr(addr);
 		prev_state = page_state_pte(e);
 		next_state = page_state_pte(ref_e);
 
@@ -482,12 +482,34 @@ static inline void sync_pages_pte(struct mm_struct *mm,
 			// (X, X) -> Not mapped
 			// (Pv, Pv) -> Shared. No need to sync
 			// (Pnc, Pnc) -> Clean. No need to sync
+			if (prev_state == PAGE_STATE_Pv &&
+			    page_vaddr != ref_page_vaddr) {
+#ifdef DEBUG_SYNC_PAGES_PTE
+				pr_ndckpt(
+					"%016llX: %d -> %d (update mapping)\n",
+					addr, prev_state, next_state);
+#endif
+				// DRAM page update. copy ent.
+				copy_pte_and_clwb(e, ref_e);
+			}
 		} else if (next_state == PAGE_STATE_X) {
+#ifdef DEBUG_SYNC_PAGES_PTE
+			pr_ndckpt("%016llX: %d -> %d\n", addr, prev_state,
+				  next_state);
+#endif
 			unmap_page_and_clwb(e);
 		} else if (next_state == PAGE_STATE_Pv) {
+#ifdef DEBUG_SYNC_PAGES_PTE
+			pr_ndckpt("%016llX: %d -> %d ent@0x%016llX\n", addr,
+				  prev_state, next_state, ndckpt_v2p(e));
+#endif
 			unmap_page_and_clwb(e);
 			copy_pte_and_clwb(e, ref_e);
 		} else {
+#ifdef DEBUG_SYNC_PAGES_PTE
+			pr_ndckpt("%016llX: %d -> %d\n", addr, prev_state,
+				  next_state);
+#endif
 			if (prev_state == PAGE_STATE_X ||
 			    prev_state == PAGE_STATE_Pv) {
 				map_zeroed_nvdimm_page_page(e);
@@ -532,6 +554,9 @@ static inline void sync_pages_pte(struct mm_struct *mm,
 					map_zeroed_nvdimm_page_##ctname(e);        \
 					traverse_##ename(addr, t, &e, &ct);        \
 				}                                                  \
+			} else if (prev_state == TABLE_STATE_Tv &&                 \
+				   ct != ref_ct) {                                 \
+				copy_##ename##_and_clwb(e, ref_e);                 \
 			}                                                          \
 			if (next_state == TABLE_STATE_Tn) {                        \
 				nextfunc(mm, vma, ct, ref_ct, addr,                \
@@ -541,8 +566,11 @@ static inline void sync_pages_pte(struct mm_struct *mm,
 		}                                                                  \
 	}
 
+// sync_pages_pde
 def_sync_pages(pde, pt, pmd_t, pte_t, sync_pages_pte);
+// sync_pages_pdpte
 def_sync_pages(pdpte, pd, pud_t, pmd_t, sync_pages_pde);
+// sync_pages_pml4e
 def_sync_pages(pml4e, pdpt, pgd_t, pud_t, sync_pages_pdpte);
 
 static void sync_pages(struct mm_struct *mm, struct vm_area_struct *vma,
@@ -556,16 +584,152 @@ static void sync_vmas(struct mm_struct *mm, pgd_t *dst_pgd, pgd_t *src_pgd)
 {
 	struct vm_area_struct *vma;
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) != 0) {
-			continue;
-		}
 		sync_pages(mm, vma, dst_pgd, src_pgd, vma->vm_start,
 			   vma->vm_end);
 	}
 }
 
-static void fix_pmem_part_of_ctx(struct mm_struct *mm,
-				 struct PersistentProcessInfo *pproc, int idx);
+#ifdef NDCKPT_DEBUG
+static void check_page_is_synced(pgd_t *t4, pgd_t *ref_t4, uint64_t start,
+				 uint64_t end)
+{
+	// FOR DEBUG
+	uint64_t addr;
+	//
+	pgd_t *ref_e4;
+	pud_t *ref_t3 = NULL;
+	pud_t *ref_e3;
+	pmd_t *ref_t2 = NULL;
+	pmd_t *ref_e2;
+	pte_t *ref_t1 = NULL;
+	pte_t *ref_e1;
+	void *ref_page_vaddr;
+	//
+	pgd_t *e4;
+	pud_t *t3 = NULL;
+	pud_t *e3;
+	pmd_t *t2 = NULL;
+	pmd_t *e2;
+	pte_t *t1 = NULL;
+	pte_t *e1;
+	void *page_vaddr;
+
+	for (addr = start; addr < end;) {
+		traverse_pml4e(addr, ref_t4, &ref_e4, &ref_t3);
+		traverse_pml4e(addr, t4, &e4, &t3);
+		if (table_state_pml4e(e4) != table_state_pml4e(ref_e4)) {
+			pr_ndckpt("state diff:\n");
+			pr_ndckpt("t4:\n");
+			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
+			pr_ndckpt("state diff:\n");
+			pr_ndckpt("ref_t4:\n");
+			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
+			BUG();
+		}
+		if (table_state_pml4e(e4) == TABLE_STATE_X) {
+			addr = next_pml4e_addr(addr);
+			continue;
+		}
+		if (table_state_pml4e(e4) == TABLE_STATE_Tv && t3 != ref_t3) {
+			pr_ndckpt("Tv mapping diff:\n");
+			pr_ndckpt("t4:\n");
+			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
+			pr_ndckpt("state diff:\n");
+			pr_ndckpt("ref_t4:\n");
+			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
+			BUG();
+		}
+
+		traverse_pdpte(addr, ref_t3, &ref_e3, &ref_t2);
+		traverse_pdpte(addr, t3, &e3, &t2);
+		if (table_state_pdpte(e3) != table_state_pdpte(ref_e3)) {
+			pr_ndckpt("state diff:\n");
+			pr_ndckpt("t4:\n");
+			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
+			pr_ndckpt("state diff:\n");
+			pr_ndckpt("ref_t4:\n");
+			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
+			BUG();
+		}
+		if (table_state_pdpte(e3) == TABLE_STATE_X) {
+			addr = next_pdpte_addr(addr);
+			continue;
+		}
+		if (table_state_pdpte(e3) == TABLE_STATE_Tv && t2 != ref_t2) {
+			pr_ndckpt("Tv mapping diff:\n");
+			pr_ndckpt("t4:\n");
+			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
+			pr_ndckpt("state diff:\n");
+			pr_ndckpt("ref_t4:\n");
+			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
+			BUG();
+		}
+
+		traverse_pde(addr, ref_t2, &ref_e2, &ref_t1);
+		traverse_pde(addr, t2, &e2, &t1);
+		if (table_state_pde(e2) != table_state_pde(ref_e2)) {
+			pr_ndckpt("state diff:\n");
+			pr_ndckpt("t4:\n");
+			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
+			pr_ndckpt("state diff:\n");
+			pr_ndckpt("ref_t4:\n");
+			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
+			BUG();
+		}
+		if (table_state_pde(e2) == TABLE_STATE_X) {
+			addr = next_pde_addr(addr);
+			continue;
+		}
+		if (table_state_pde(e2) == TABLE_STATE_Tv && t1 != ref_t1) {
+			pr_ndckpt("Tv mapping diff:\n");
+			pr_ndckpt("t4:\n");
+			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
+			pr_ndckpt("state diff:\n");
+			pr_ndckpt("ref_t4:\n");
+			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
+			BUG();
+		}
+
+		traverse_pte(addr, ref_t1, &ref_e1, &ref_page_vaddr);
+		traverse_pte(addr, t1, &e1, &page_vaddr);
+		if (page_state_pte(e1) != page_state_pte(ref_e1)) {
+			pr_ndckpt("state diff: expected %d but %d\n",
+				  page_state_pte(ref_e1), page_state_pte(e1));
+			pr_ndckpt("t4:\n");
+			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
+			pr_ndckpt("state diff:\n");
+			pr_ndckpt("ref_t4:\n");
+			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
+			BUG();
+		}
+		if (page_state_pte(e1) == TABLE_STATE_X) {
+			addr = next_pte_addr(addr);
+			continue;
+		}
+		if (page_state_pte(e1) == PAGE_STATE_Pv &&
+		    page_vaddr != ref_page_vaddr) {
+			pr_ndckpt("Pv mapping diff:\n");
+			pr_ndckpt("t4:\n");
+			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
+			pr_ndckpt("state diff:\n");
+			pr_ndckpt("ref_t4:\n");
+			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
+			BUG();
+		}
+		if (IS_PAGE_STATE_ON_NVDIMM(page_state_pte(e1)) &&
+		    memcmp(page_vaddr, ref_page_vaddr, PAGE_SIZE) != 0) {
+			pr_ndckpt("Page on NVDIMM data diff:\n");
+			pr_ndckpt("t4:\n");
+			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
+			pr_ndckpt("state diff:\n");
+			pr_ndckpt("ref_t4:\n");
+			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
+			BUG();
+		}
+		addr = next_pte_addr(addr);
+	}
+}
+#endif
 
 void pproc_commit(struct task_struct *target,
 		  struct PersistentProcessInfo *pproc, struct mm_struct *mm,
@@ -580,7 +744,6 @@ void pproc_commit(struct task_struct *target,
 	}
 
 	pproc_set_regs(pproc, prev_running_ctx_idx, regs);
-	fix_pmem_part_of_ctx(mm, pproc, prev_running_ctx_idx);
 	flush_target_vmas(mm);
 	pproc_set_vma_range(pproc, mm, prev_running_ctx_idx);
 	pr_ndckpt_ckpt("Ctx #%d has been committed\n", prev_running_ctx_idx);
@@ -591,6 +754,9 @@ void pproc_commit(struct task_struct *target,
 		       next_running_ctx_idx);
 	sync_vmas(mm, pproc->ctx[next_running_ctx_idx].pgd,
 		  pproc->ctx[prev_running_ctx_idx].pgd);
+	check_page_is_synced(pproc->ctx[next_running_ctx_idx].pgd,
+			     pproc->ctx[prev_running_ctx_idx].pgd, 0,
+			     1ULL << 47);
 	// Finally, switch the cr3 to the new running context's pgd.
 	switch_mm_context(target, mm, pproc->ctx[next_running_ctx_idx].pgd);
 	spin_unlock(&pproc->ckpt_lock);
@@ -626,7 +792,8 @@ static bool verify_pml4_kernel_map(pgd_t *mm_pgd, pgd_t *ctx_pgd)
 	return is_invalid;
 }
 
-static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
+static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end,
+				      bool exclude_leaf_page)
 {
 	uint64_t addr;
 	pgd_t *e4;
@@ -677,7 +844,8 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end)
 			addr = next_pte_addr(addr);
 			continue;
 		}
-		if (!ndckpt_is_virt_addr_in_nvdimm(page_vaddr)) {
+		if (!exclude_leaf_page &&
+		    !ndckpt_is_virt_addr_in_nvdimm(page_vaddr)) {
 			replace_page_with_nvdimm_page(e1);
 			ndckpt_invlpg((void *)addr);
 		}
@@ -703,13 +871,13 @@ static void mark_target_vmas(struct mm_struct *mm)
 		}
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
 			pr_ndckpt("  This is heap vma.\n");
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		if (vma->vm_start <= mm->start_stack &&
 		    mm->start_stack <= vma->vm_end) {
 			pr_ndckpt("  This is stack vma.\n");
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		pr_ndckpt("  This is UNKNOWN vma but writable.\n");
@@ -731,12 +899,16 @@ static void fix_pmem_part_of_ctx(struct mm_struct *mm,
 				 struct PersistentProcessInfo *pproc, int idx)
 {
 	struct vm_area_struct *vma;
+	// Replace page structures in lower half with nvdimm page
+	// This does not replaces leaf page
+	replace_pages_with_nvdimm(pproc->ctx[idx].pgd, 0, 1ULL << 47, true);
+	// Replace leaf pages in target vma
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
 			continue;
 		}
 		replace_pages_with_nvdimm(pproc->ctx[idx].pgd, vma->vm_start,
-					  vma->vm_end);
+					  vma->vm_end, false);
 	}
 }
 

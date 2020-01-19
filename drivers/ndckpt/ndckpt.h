@@ -101,7 +101,8 @@ static inline int ndckpt_is_target_vma(struct vm_area_struct *vma)
 static inline int ndckpt_is_enabled_on_task(struct task_struct *target)
 {
 	return target->flags & PF_NDCKPT_ENABLED &&
-	       (target->flags & PF_FORKNOEXEC) == 0;
+	       (target->flags & PF_FORKNOEXEC) == 0 &&
+	       ndckpt_is_virt_addr_in_nvdimm(target->mm->pgd);
 }
 
 static inline int ndckpt_is_enabled_on_current(void)
