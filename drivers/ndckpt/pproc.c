@@ -19,12 +19,15 @@ struct PersistentVMARange {
 	uint64_t start, end;
 };
 
+#define PCTX_NUM_OF_VMAS 5
+
 struct PersistentProcessInfo {
 	struct PersistentExecutionContext {
 		pgd_t *volatile pgd;
 		uint64_t regs[PCTX_REGS];
-		struct PersistentVMARange heap;
-		struct PersistentVMARange stack;
+		int vma_idx_stack;
+		int vma_idx_heap;
+		struct PersistentVMARange vmas[PCTX_NUM_OF_VMAS];
 	} ctx[2];
 	pgd_t *volatile org_pgd; // on DRAM
 	int valid_ctx_idx;
@@ -134,27 +137,46 @@ void pproc_restore_regs(struct pt_regs *regs,
 	regs->flags = ctx->regs[PCTX_REG_IDX_RFLAGS];
 }
 
-void pproc_set_vma_range(struct PersistentProcessInfo *pproc,
-			 struct mm_struct *mm, int ctx_idx)
+void pproc_save_vmas(struct PersistentProcessInfo *pproc, int ctx_idx,
+		     struct mm_struct *mm)
 {
 	struct vm_area_struct *vma;
+	struct PersistentExecutionContext *ctx = &pproc->ctx[ctx_idx];
+	int used = 0;
+
+	ctx->vma_idx_stack = -1;
+	ndckpt_clwb(&ctx->vma_idx_stack);
+	ctx->vma_idx_heap = -1;
+	ndckpt_clwb(&ctx->vma_idx_heap);
+
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		pr_ndckpt_vma(vma);
+		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
+			pr_ndckpt("  This is not a target. skip.\n");
+			continue;
+		}
+		if (used >= PCTX_NUM_OF_VMAS) {
+			printk("Too many vmas\n");
+			BUG();
+		}
+		ctx->vmas[used].start = vma->vm_start;
+		ctx->vmas[used].end = vma->vm_end;
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
-			pproc->ctx[ctx_idx].heap.start = vma->vm_start;
-			pproc->ctx[ctx_idx].heap.end = vma->vm_end;
-			continue;
+			pr_ndckpt("  vma[%d] is heap.\n", used);
+			ctx->vma_idx_heap = used;
+			ndckpt_clwb(&ctx->vma_idx_heap);
+		} else if (vma->vm_start <= mm->start_stack &&
+			   mm->start_stack <= vma->vm_end) {
+			pr_ndckpt("  vma[%d] is stack.\n", used);
+			ctx->vma_idx_stack = used;
+			ndckpt_clwb(&ctx->vma_idx_stack);
+		} else {
+			pr_ndckpt("  vma[%d] is UNKNOWN but target.\n", used);
 		}
-		if (vma->vm_start <= mm->start_stack &&
-		    mm->start_stack <= vma->vm_end) {
-			pproc->ctx[ctx_idx].stack.start = vma->vm_start;
-			pproc->ctx[ctx_idx].stack.end = vma->vm_end;
-			continue;
-		}
+		ndckpt_clwb_range(&ctx->vmas[used],
+				  sizeof(struct PersistentVMARange));
+		used++;
 	}
-	ndckpt_clwb_range(&pproc->ctx[ctx_idx].heap,
-			  sizeof(struct PersistentVMARange));
-	ndckpt_clwb_range(&pproc->ctx[ctx_idx].stack,
-			  sizeof(struct PersistentVMARange));
 }
 
 #ifdef NDCKPT_DEBUG
@@ -736,7 +758,7 @@ void pproc_commit(struct task_struct *target,
 
 	pproc_set_regs(pproc, prev_running_ctx_idx, regs);
 	flush_target_vmas(mm);
-	pproc_set_vma_range(pproc, mm, prev_running_ctx_idx);
+	// TODO: Save vmas here
 	pr_ndckpt_ckpt("Ctx #%d has been committed\n", prev_running_ctx_idx);
 	// At this point, running ctx has become clean so both context is valid.
 	pproc_set_valid_ctx(pproc, prev_running_ctx_idx);
@@ -851,9 +873,7 @@ static void mark_target_vmas(struct mm_struct *mm)
 	pr_ndckpt("mm->brk = 0x%016llX\n", (uint64_t)mm->brk);
 	pr_ndckpt("mm->start_brk = 0x%016llX\n", (uint64_t)mm->start_brk);
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		pr_ndckpt("vma@0x%016llX [0x%016llX - 0x%016llX] 0x%016llX\n",
-			  (uint64_t)vma, (uint64_t)vma->vm_start,
-			  (uint64_t)vma->vm_end, (uint64_t)vma->vm_flags);
+		pr_ndckpt_vma(vma);
 		vma->vm_ckpt_flags = 0;
 		if ((vma->vm_flags & VM_WRITE) == 0) {
 			// No need to save readonly vma.
@@ -927,6 +947,8 @@ int64_t pproc_init(struct task_struct *target,
 	memcpy(pgd_ctx1, mm->pgd, PAGE_SIZE);
 	ndckpt_clwb_range(pgd_ctx1, PAGE_SIZE);
 
+	mark_target_vmas(mm);
+	pproc_save_vmas(pproc, 0, mm);
 	pproc_set_regs(pproc, 0, regs);
 	pproc_set_valid_ctx(pproc, 0); // dummy
 
@@ -975,8 +997,7 @@ int64_t pproc_restore(struct PersistentMemoryManager *pman,
 	fix_pmem_part_of_ctx(mm, pproc, 1);
 	fix_dram_part_of_ctx(mm, pproc, 0);
 	fix_dram_part_of_ctx(mm, pproc, 1);
-	pproc_set_vma_range(pproc, mm, 0);
-	pproc_set_vma_range(pproc, mm, 1);
+	// TODO: Restore vmas here
 
 	pman_set_last_proc_info(pman, NULL);
 	// THIS IS FAKE: we set ctx[1] as valid to commit ctx[0]
