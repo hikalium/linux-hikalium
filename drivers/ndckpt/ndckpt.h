@@ -94,6 +94,44 @@ void ndckpt_exit_mm(struct task_struct *target);
 int64_t ndckpt_handle_execve(struct task_struct *task);
 void ndckpt_notify_mmap_region(void);
 
+static const uint64_t kCacheLineSize = 64;
+static const uint64_t kPageSizeExponent = 12;
+
+static inline void ndckpt_clwb(volatile void *__p)
+{
+	asm volatile("clwb %0" : "+m"(*(volatile char __force *)__p));
+}
+
+static inline void ndckpt_invlpg(volatile void *__p)
+{
+	asm volatile("invlpg %0" : "+m"(*(volatile char __force *)__p));
+}
+
+static inline void ndckpt_mfence(void)
+{
+	asm volatile("mfence");
+}
+
+static inline void ndckpt_clwb_range(volatile void *p, size_t byte_size)
+{
+	const uint64_t end_addr = (uint64_t)p + byte_size;
+	const size_t num_of_lines =
+		((end_addr - ((uint64_t)p & ~(kCacheLineSize - 1))) +
+		 kCacheLineSize - 1) /
+		kCacheLineSize;
+	size_t i;
+	for (i = 0; i < num_of_lines; i++) {
+		ndckpt_clwb(p);
+		p = (volatile uint8_t *)p + kCacheLineSize;
+	}
+}
+
+static inline void memcpy_and_clwb(void *dst, void *src, size_t size)
+{
+	memcpy(dst, src, size);
+	ndckpt_clwb_range(dst, size);
+}
+
 static inline int ndckpt_is_target_vma(struct vm_area_struct *vma)
 {
 	return (vma->vm_ckpt_flags & VM_CKPT_TARGET) != 0;
@@ -189,6 +227,11 @@ static inline int ndckpt_is_pmd_points_nvdimm_page(pmd_t e)
 	return ndckpt_is_phys_addr_in_nvdimm(ndckpt_pmd_to_pdpt_paddr(e));
 }
 
+static inline int ndckpt_is_pte_points_nvdimm_page(pte_t e)
+{
+	return ndckpt_is_phys_addr_in_nvdimm(pte_val(e) & PTE_PFN_MASK);
+}
+
 int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
 		       struct vm_area_struct *vma);
 
@@ -241,6 +284,18 @@ static inline void ndckpt_pmd_populate(struct mm_struct *mm, pmd_t *pmd,
 static inline pte_t *ndckpt_pte_offset_kernel(pmd_t *pmd, unsigned long address)
 {
 	return (pte_t *)ndckpt_pmd_page_vaddr(*pmd) + pte_index(address);
+}
+
+static inline void ndckpt_replace_page_with_nvdimm_page(pte_t *ent_of_page)
+{
+	void *old_page_vaddr = (void *)ndckpt_page_page_vaddr(*ent_of_page);
+	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
+	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
+	ent_of_page->pte = (ent_of_page->pte & ~PTE_PFN_MASK) | new_page_paddr;
+	pte_mkwrite(*ent_of_page);
+	pte_mkdirty(*ent_of_page);
+	ndckpt_clwb(ent_of_page);
 }
 
 void ndckpt__pte_alloc(struct vm_fault *vmf);

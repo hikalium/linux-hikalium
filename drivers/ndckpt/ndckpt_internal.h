@@ -13,44 +13,6 @@
 
 #include "ndckpt.h"
 
-static const uint64_t kCacheLineSize = 64;
-static const uint64_t kPageSizeExponent = 12;
-
-static inline void ndckpt_clwb(volatile void *__p)
-{
-	asm volatile("clwb %0" : "+m"(*(volatile char __force *)__p));
-}
-
-static inline void ndckpt_invlpg(volatile void *__p)
-{
-	asm volatile("invlpg %0" : "+m"(*(volatile char __force *)__p));
-}
-
-static inline void ndckpt_mfence(void)
-{
-	asm volatile("mfence");
-}
-
-static inline void ndckpt_clwb_range(volatile void *p, size_t byte_size)
-{
-	const uint64_t end_addr = (uint64_t)p + byte_size;
-	const size_t num_of_lines =
-		((end_addr - ((uint64_t)p & ~(kCacheLineSize - 1))) +
-		 kCacheLineSize - 1) /
-		kCacheLineSize;
-	size_t i;
-	for (i = 0; i < num_of_lines; i++) {
-		ndckpt_clwb(p);
-		p = (volatile uint8_t *)p + kCacheLineSize;
-	}
-}
-
-static inline void memcpy_and_clwb(void *dst, void *src, size_t size)
-{
-	memcpy(dst, src, size);
-	ndckpt_clwb_range(dst, size);
-}
-
 static inline void ndckpt_sfence(void)
 {
 	asm volatile("sfence");

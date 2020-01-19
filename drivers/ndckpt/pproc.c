@@ -28,6 +28,7 @@ struct PersistentProcessInfo {
 		uint64_t regs[PCTX_REGS];
 		int vma_idx_stack;
 		int vma_idx_heap;
+		int vma_idx_data;
 		int end_vma_idx;
 		struct PersistentVMARange vmas[PCTX_NUM_OF_VMAS];
 	} ctx[2];
@@ -142,10 +143,13 @@ static void pproc_restore_vmas(struct mm_struct *mm,
 	pr_ndckpt("mm->brk = 0x%016llX\n", (uint64_t)mm->brk);
 	pr_ndckpt("mm->start_brk = 0x%016llX\n", (uint64_t)mm->start_brk);
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if (vma->vm_file) {
+		if ((vma->vm_flags & VM_WRITE) == 0) {
 			continue;
 		}
-		if ((vma->vm_flags & VM_WRITE) == 0) {
+		if (vma->vm_file) {
+			pr_ndckpt("data vma\n");
+			pproc_restore_vm_area_struct(vma, ctx,
+						     ctx->vma_idx_data);
 			continue;
 		}
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
@@ -163,7 +167,8 @@ static void pproc_restore_vmas(struct mm_struct *mm,
 		}
 	}
 	for (i = 0; i < ctx->end_vma_idx; i++) {
-		if (i == ctx->vma_idx_stack || i == ctx->vma_idx_heap)
+		if (i == ctx->vma_idx_stack || i == ctx->vma_idx_heap ||
+		    i == ctx->vma_idx_data)
 			continue;
 		vma = vm_area_alloc(mm);
 		pr_ndckpt("ANONYMOUS vma\n");
@@ -211,6 +216,8 @@ void pproc_save_vmas(struct PersistentProcessInfo *pproc, int ctx_idx,
 	ndckpt_clwb(&ctx->vma_idx_stack);
 	ctx->vma_idx_heap = -1;
 	ndckpt_clwb(&ctx->vma_idx_heap);
+	ctx->vma_idx_data = -1;
+	ndckpt_clwb(&ctx->vma_idx_data);
 
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 		pr_ndckpt_vma(vma);
@@ -226,13 +233,21 @@ void pproc_save_vmas(struct PersistentProcessInfo *pproc, int ctx_idx,
 		ctx->vmas[used].vm_end = vma->vm_end;
 		ctx->vmas[used].vm_flags = vma->vm_flags;
 		ctx->vmas[used].vm_page_prot = vma->vm_page_prot;
+		if (!vma_is_anonymous(vma)) {
+			pr_ndckpt("  vma[%d] is .data\n", used);
+			BUG_ON(ctx->vma_idx_data != -1);
+			ctx->vma_idx_data = used;
+			ndckpt_clwb(&ctx->vma_idx_data);
+		}
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
 			pr_ndckpt("  vma[%d] is heap.\n", used);
+			BUG_ON(ctx->vma_idx_heap != -1);
 			ctx->vma_idx_heap = used;
 			ndckpt_clwb(&ctx->vma_idx_heap);
 		} else if (vma->vm_start <= mm->start_stack &&
 			   mm->start_stack <= vma->vm_end) {
 			pr_ndckpt("  vma[%d] is stack.\n", used);
+			BUG_ON(ctx->vma_idx_stack != -1);
 			ctx->vma_idx_stack = used;
 			ndckpt_clwb(&ctx->vma_idx_stack);
 		} else {
@@ -434,8 +449,12 @@ static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
 		}
 		page_paddr = ndckpt_v2p(page_vaddr);
 		if (!ndckpt_is_virt_addr_in_nvdimm(page_vaddr)) {
-			printk("flush_dirty_pages: addr 0x%016llx pgd@0x%016llx\n",
-			       addr, (uint64_t)t4);
+			if (!pte_write(*e1)) {
+				// Read only, before CoW. Skip flush.
+				addr = next_pte_addr(addr);
+				continue;
+			}
+			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
 			BUG();
 		}
 		if ((e1->pte & _PAGE_DIRTY) == 0) {
@@ -822,7 +841,14 @@ void mark_target_vmas(struct mm_struct *mm)
 		pr_ndckpt_vma(vma);
 		vma->vm_ckpt_flags = 0;
 		if (vma->vm_file) {
-			pr_ndckpt("  This vma is file mapped. skip.\n");
+			if ((vma->vm_flags & VM_WRITE) == 0) {
+				// No need to save readonly vma.
+				pr_ndckpt(
+					"  This vma is readonly and file backed. skip.\n");
+				continue;
+			}
+			pr_ndckpt("  This vma is .data\n");
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		if ((vma->vm_flags & VM_WRITE) == 0) {
