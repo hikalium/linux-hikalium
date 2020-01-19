@@ -143,6 +143,18 @@ void ndckpt_exit_mm(struct task_struct *target)
 }
 EXPORT_SYMBOL(ndckpt_exit_mm);
 
+void ndckpt_notify_mmap_region(void)
+{
+	struct PersistentMemoryManager *pman;
+	struct PersistentProcessInfo *pproc;
+	if (!ndckpt_is_enabled_on_current())
+		return;
+	pman = first_pmem_device->virt_addr;
+	pproc = pman->last_proc_info;
+	mark_target_vmas(current->mm);
+}
+EXPORT_SYMBOL(ndckpt_notify_mmap_region);
+
 int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
 		       struct vm_area_struct *vma)
 {

@@ -52,6 +52,10 @@
 #include <asm/tlb.h>
 #include <asm/mmu_context.h>
 
+#ifdef CONFIG_NDCKPT
+#include "../drivers/ndckpt/ndckpt.h"
+#endif
+
 #include "internal.h"
 
 #ifndef arch_mmap_check
@@ -1842,6 +1846,10 @@ out:
 	vma->vm_flags |= VM_SOFTDIRTY;
 
 	vma_set_page_prot(vma);
+
+#ifdef CONFIG_NDCKPT
+  ndckpt_notify_mmap_region();
+#endif
 
 	return addr;
 

@@ -92,6 +92,7 @@ int ndckpt_is_virt_addr_in_nvdimm(void *vaddr);
 int ndckpt_handle_checkpoint(void);
 void ndckpt_exit_mm(struct task_struct *target);
 int64_t ndckpt_handle_execve(struct task_struct *task);
+void ndckpt_notify_mmap_region(void);
 
 static inline int ndckpt_is_target_vma(struct vm_area_struct *vma)
 {

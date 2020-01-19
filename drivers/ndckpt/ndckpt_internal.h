@@ -400,6 +400,7 @@ void pproc_restore_regs(struct pt_regs *regs,
 			struct PersistentProcessInfo *proc, int ctx_idx);
 void pproc_print_regs(struct PersistentProcessInfo *proc, int ctx_idx);
 void pproc_printk(struct PersistentProcessInfo *pproc);
+void mark_target_vmas(struct mm_struct *mm);
 void pproc_commit(struct task_struct *target,
 		  struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 		  struct pt_regs *regs);

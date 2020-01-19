@@ -16,10 +16,11 @@
 
 struct PersistentVMARange {
 	// Corresponds to vma->vm_start/end
-	uint64_t start, end;
+	uint64_t vm_start, vm_end, vm_flags;
+	pgprot_t vm_page_prot;
 };
 
-#define PCTX_NUM_OF_VMAS 5
+#define PCTX_NUM_OF_VMAS 16
 
 struct PersistentProcessInfo {
 	struct PersistentExecutionContext {
@@ -27,6 +28,7 @@ struct PersistentProcessInfo {
 		uint64_t regs[PCTX_REGS];
 		int vma_idx_stack;
 		int vma_idx_heap;
+		int end_vma_idx;
 		struct PersistentVMARange vmas[PCTX_NUM_OF_VMAS];
 	} ctx[2];
 	pgd_t *volatile org_pgd; // on DRAM
@@ -48,6 +50,7 @@ pgd_t *pproc_get_org_pgd(struct PersistentProcessInfo *pproc)
 struct PersistentProcessInfo *pproc_alloc(void)
 {
 	struct PersistentProcessInfo *pproc = ndckpt_alloc_zeroed_page();
+	BUILD_BUG_ON((sizeof(struct PersistentProcessInfo) > PAGE_SIZE));
 	pproc->ctx[0].pgd = NULL;
 	pproc->ctx[1].pgd = NULL;
 	pproc->valid_ctx_idx = -1;
@@ -110,6 +113,66 @@ void pproc_set_regs(struct PersistentProcessInfo *proc, int ctx_idx,
 	ndckpt_sfence();
 }
 
+void pproc_restore_vm_area_struct(struct vm_area_struct *dst,
+				  struct PersistentExecutionContext *ectx,
+				  int vma_idx)
+{
+	// This believes there is no need to remap this vma.
+	// We may need to remap vmas to treat modification properly
+	struct PersistentVMARange *src;
+	pr_ndckpt("  restoring from vmas[%d]\n", vma_idx);
+	BUG_ON(vma_idx < 0);
+	src = &ectx->vmas[vma_idx];
+	dst->vm_start = src->vm_start;
+	dst->vm_end = src->vm_end;
+	dst->vm_flags = src->vm_flags;
+	dst->vm_page_prot = src->vm_page_prot;
+}
+
+static void pproc_restore_vmas(struct mm_struct *mm,
+			       struct PersistentProcessInfo *proc, int ctx_idx)
+{
+	struct PersistentExecutionContext *ctx;
+	struct vm_area_struct *vma;
+	int i;
+	BUG_ON(ctx_idx < 0 || 2 <= ctx_idx);
+	ctx = &proc->ctx[ctx_idx];
+	pr_ndckpt("Restoring vmas saved in ctx[%d]: %d\n", ctx_idx,
+		  ctx->end_vma_idx);
+	pr_ndckpt("mm->brk = 0x%016llX\n", (uint64_t)mm->brk);
+	pr_ndckpt("mm->start_brk = 0x%016llX\n", (uint64_t)mm->start_brk);
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		if (vma->vm_file) {
+			continue;
+		}
+		if ((vma->vm_flags & VM_WRITE) == 0) {
+			continue;
+		}
+		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
+			pr_ndckpt("heap vma\n");
+			pproc_restore_vm_area_struct(vma, ctx,
+						     ctx->vma_idx_heap);
+			continue;
+		}
+		if (vma->vm_start <= mm->start_stack &&
+		    mm->start_stack <= vma->vm_end) {
+			pr_ndckpt("stack vma\n");
+			pproc_restore_vm_area_struct(vma, ctx,
+						     ctx->vma_idx_stack);
+			continue;
+		}
+	}
+	for (i = 0; i < ctx->end_vma_idx; i++) {
+		if (i == ctx->vma_idx_stack || i == ctx->vma_idx_heap)
+			continue;
+		vma = vm_area_alloc(mm);
+		pr_ndckpt("ANONYMOUS vma\n");
+		vma->vm_ops = NULL;
+		pproc_restore_vm_area_struct(vma, ctx, i);
+		insert_vm_struct(mm, vma);
+	}
+}
+
 void pproc_restore_regs(struct pt_regs *regs,
 			struct PersistentProcessInfo *proc, int ctx_idx)
 {
@@ -159,8 +222,10 @@ void pproc_save_vmas(struct PersistentProcessInfo *pproc, int ctx_idx,
 			printk("Too many vmas\n");
 			BUG();
 		}
-		ctx->vmas[used].start = vma->vm_start;
-		ctx->vmas[used].end = vma->vm_end;
+		ctx->vmas[used].vm_start = vma->vm_start;
+		ctx->vmas[used].vm_end = vma->vm_end;
+		ctx->vmas[used].vm_flags = vma->vm_flags;
+		ctx->vmas[used].vm_page_prot = vma->vm_page_prot;
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
 			pr_ndckpt("  vma[%d] is heap.\n", used);
 			ctx->vma_idx_heap = used;
@@ -177,6 +242,9 @@ void pproc_save_vmas(struct PersistentProcessInfo *pproc, int ctx_idx,
 				  sizeof(struct PersistentVMARange));
 		used++;
 	}
+	ctx->end_vma_idx = used;
+	ndckpt_clwb(&ctx->end_vma_idx);
+	pr_ndckpt("Saved %d vmas\n", ctx->end_vma_idx);
 }
 
 #ifdef NDCKPT_DEBUG
@@ -199,6 +267,18 @@ void pproc_print_regs(struct PersistentProcessInfo *proc, int ctx_idx)
 	}
 }
 
+void pproc_print_vmas(struct PersistentProcessInfo *proc, int ctx_idx)
+{
+	struct PersistentExecutionContext *ctx;
+	int i;
+	BUG_ON(ctx_idx < 0 || 2 <= ctx_idx);
+	ctx = &proc->ctx[ctx_idx];
+	pr_ndckpt("vmas saved in ctx[%d]: %d\n", ctx_idx, ctx->end_vma_idx);
+	for (i = 0; i < ctx->end_vma_idx; i++) {
+		pr_ndckpt_vma((&ctx->vmas[i]));
+	}
+}
+
 void pproc_printk(struct PersistentProcessInfo *pproc)
 {
 	int i;
@@ -211,9 +291,9 @@ void pproc_printk(struct PersistentProcessInfo *pproc)
 	pr_ndckpt("  Ctx #%d is valid\n", pproc->valid_ctx_idx);
 	for (i = 0; i < 2; i++) {
 		pr_ndckpt("Ctx #%d:\n", i);
-		//pr_ndckpt_pml4(pproc->ctx[i].pgd);
-		ndckpt_print_pml4(pproc->ctx[i].pgd);
+		pr_ndckpt_pml4(pproc->ctx[i].pgd);
 		pproc_print_regs(pproc, i);
+		pproc_print_vmas(pproc, i);
 	}
 }
 
@@ -485,9 +565,8 @@ static inline void switch_mm_context(struct task_struct *target,
 #endif
 
 //#define DEBUG_SYNC_PAGES_PTE
-static inline void sync_pages_pte(struct mm_struct *mm,
-				  struct vm_area_struct *vma, pte_t *t,
-				  pte_t *ref_t, uint64_t addr, uint64_t end)
+static inline void sync_pages_pte(struct mm_struct *mm, pte_t *t, pte_t *ref_t,
+				  uint64_t addr, uint64_t end)
 {
 	while (addr < end) {
 		pte_t *e, *ref_e;
@@ -557,10 +636,9 @@ static inline void sync_pages_pte(struct mm_struct *mm,
 #endif
 
 #define def_sync_pages(ename, ctname, ttype, cttype, nextfunc)                     \
-	static inline void sync_pages_##ename(struct mm_struct *mm,                \
-					      struct vm_area_struct *vma,          \
-					      ttype *t, ttype *ref_t,              \
-					      uint64_t addr, uint64_t end)         \
+	static inline void sync_pages_##ename(struct mm_struct *mm, ttype *t,      \
+					      ttype *ref_t, uint64_t addr,         \
+					      uint64_t end)                        \
 	{                                                                          \
 		while (addr < end) {                                               \
 			const uint64_t next_addr = next_##ename##_addr(addr);      \
@@ -592,7 +670,7 @@ static inline void sync_pages_pte(struct mm_struct *mm,
 				copy_##ename##_and_clwb(e, ref_e);                 \
 			}                                                          \
 			if (next_state == TABLE_STATE_Tn) {                        \
-				nextfunc(mm, vma, ct, ref_ct, addr,                \
+				nextfunc(mm, ct, ref_ct, addr,                     \
 					 end < next_addr ? end : next_addr);       \
 			}                                                          \
 			addr = next_addr;                                          \
@@ -606,20 +684,11 @@ def_sync_pages(pdpte, pd, pud_t, pmd_t, sync_pages_pde);
 // sync_pages_pml4e
 def_sync_pages(pml4e, pdpt, pgd_t, pud_t, sync_pages_pdpte);
 
-static void sync_pages(struct mm_struct *mm, struct vm_area_struct *vma,
-		       pgd_t *t4, pgd_t *ref_t4, uint64_t start, uint64_t end)
+static void sync_pages(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
+		       uint64_t start, uint64_t end)
 {
-	sync_pages_pml4e(mm, vma, t4, ref_t4, start, end);
+	sync_pages_pml4e(mm, t4, ref_t4, start, end);
 	ndckpt_sfence();
-}
-
-static void sync_vmas(struct mm_struct *mm, pgd_t *dst_pgd, pgd_t *src_pgd)
-{
-	struct vm_area_struct *vma;
-	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		sync_pages(mm, vma, dst_pgd, src_pgd, vma->vm_start,
-			   vma->vm_end);
-	}
 }
 
 #ifdef NDCKPT_DEBUG
@@ -744,6 +813,39 @@ static void check_page_is_synced(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 }
 #endif
 
+void mark_target_vmas(struct mm_struct *mm)
+{
+	struct vm_area_struct *vma;
+	pr_ndckpt("mm->brk = 0x%016llX\n", (uint64_t)mm->brk);
+	pr_ndckpt("mm->start_brk = 0x%016llX\n", (uint64_t)mm->start_brk);
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		pr_ndckpt_vma(vma);
+		vma->vm_ckpt_flags = 0;
+		if (vma->vm_file) {
+			pr_ndckpt("  This vma is file mapped. skip.\n");
+			continue;
+		}
+		if ((vma->vm_flags & VM_WRITE) == 0) {
+			// No need to save readonly vma.
+			pr_ndckpt("  This vma is readonly. skip.\n");
+			continue;
+		}
+		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
+			pr_ndckpt("  This is heap vma.\n");
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			continue;
+		}
+		if (vma->vm_start <= mm->start_stack &&
+		    mm->start_stack <= vma->vm_end) {
+			pr_ndckpt("  This is stack vma.\n");
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			continue;
+		}
+		pr_ndckpt("  This is writable ANONYMOUS vma.\n");
+		vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+	}
+}
+
 void pproc_commit(struct task_struct *target,
 		  struct PersistentProcessInfo *pproc, struct mm_struct *mm,
 		  struct pt_regs *regs)
@@ -756,6 +858,9 @@ void pproc_commit(struct task_struct *target,
 		return;
 	}
 
+	mark_target_vmas(mm);
+	pproc_save_vmas(pproc, prev_running_ctx_idx, mm);
+
 	pproc_set_regs(pproc, prev_running_ctx_idx, regs);
 	flush_target_vmas(mm);
 	// TODO: Save vmas here
@@ -765,8 +870,8 @@ void pproc_commit(struct task_struct *target,
 	// prepare next running context
 	pr_ndckpt_ckpt("Sync Ctx #%d -> Ctx #%d\n", prev_running_ctx_idx,
 		       next_running_ctx_idx);
-	sync_vmas(mm, pproc->ctx[next_running_ctx_idx].pgd,
-		  pproc->ctx[prev_running_ctx_idx].pgd);
+	sync_pages(mm, pproc->ctx[next_running_ctx_idx].pgd,
+		   pproc->ctx[prev_running_ctx_idx].pgd, 0, 1ULL << 47);
 	check_page_is_synced(mm, pproc->ctx[next_running_ctx_idx].pgd,
 			     pproc->ctx[prev_running_ctx_idx].pgd, 0,
 			     1ULL << 47);
@@ -865,35 +970,6 @@ static void replace_pages_with_nvdimm(pgd_t *t4, uint64_t start, uint64_t end,
 		addr = next_pte_addr(addr);
 	}
 	ndckpt_sfence();
-}
-
-static void mark_target_vmas(struct mm_struct *mm)
-{
-	struct vm_area_struct *vma;
-	pr_ndckpt("mm->brk = 0x%016llX\n", (uint64_t)mm->brk);
-	pr_ndckpt("mm->start_brk = 0x%016llX\n", (uint64_t)mm->start_brk);
-	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		pr_ndckpt_vma(vma);
-		vma->vm_ckpt_flags = 0;
-		if ((vma->vm_flags & VM_WRITE) == 0) {
-			// No need to save readonly vma.
-			pr_ndckpt("  This vma is readonly. skip.\n");
-			continue;
-		}
-		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
-			pr_ndckpt("  This is heap vma.\n");
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
-			continue;
-		}
-		if (vma->vm_start <= mm->start_stack &&
-		    mm->start_stack <= vma->vm_end) {
-			pr_ndckpt("  This is stack vma.\n");
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
-			continue;
-		}
-		pr_ndckpt("  This is UNKNOWN vma but writable.\n");
-		pr_ndckpt_pgtable_range(mm->pgd, vma->vm_start, vma->vm_end);
-	}
 }
 
 static void fix_dram_part_of_ctx(struct mm_struct *mm,
@@ -1004,6 +1080,7 @@ int64_t pproc_restore(struct PersistentMemoryManager *pman,
 	pproc_set_valid_ctx(pproc, 1 - valid_ctx_idx);
 	mm->pgd = pproc->ctx[valid_ctx_idx].pgd;
 	pproc_restore_regs(regs, pproc, valid_ctx_idx);
+	pproc_restore_vmas(mm, pproc, valid_ctx_idx);
 	pproc_commit(target, pproc, target->mm, regs);
 
 	// At this point, ctx[0] is commited and marked as valid,
