@@ -903,18 +903,6 @@ static void fix_pmem_part_of_ctx(struct mm_struct *mm,
 	}
 }
 
-static void print_target_vma_mapping(struct mm_struct *mm)
-{
-	struct vm_area_struct *vma;
-	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
-			continue;
-		}
-		pr_ndckpt_vma(vma);
-		pr_ndckpt_pgtable_range(mm->pgd, vma->vm_start, vma->vm_end);
-	}
-}
-
 int64_t pproc_init(struct task_struct *target,
 		   struct PersistentMemoryManager *pman, struct mm_struct *mm,
 		   struct pt_regs *regs)
@@ -945,6 +933,21 @@ int64_t pproc_init(struct task_struct *target,
 	return pproc_restore(pman, target, pproc);
 }
 
+//#define DEBUG_PPROC_RESTORE
+#ifdef DEBUG_PPROC_RESTORE
+static void print_target_vma_mapping(struct mm_struct *mm)
+{
+	struct vm_area_struct *vma;
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
+			continue;
+		}
+		pr_ndckpt_vma(vma);
+		pr_ndckpt_pgtable_range(mm->pgd, vma->vm_start, vma->vm_end);
+	}
+}
+#endif
+
 int64_t pproc_restore(struct PersistentMemoryManager *pman,
 		      struct task_struct *target,
 		      struct PersistentProcessInfo *pproc)
@@ -955,13 +958,13 @@ int64_t pproc_restore(struct PersistentMemoryManager *pman,
 
 	spin_lock_init(&pproc->ckpt_lock);
 
+	BUG_ON(valid_ctx_idx < 0 || 2 <= valid_ctx_idx);
+#ifdef DEBUG_PPROC_RESTORE
 	pr_ndckpt_restore("restore from obj id = %016llX\n", target->ndckpt_id);
 	pproc_printk(pproc);
-	BUG_ON(valid_ctx_idx < 0 || 2 <= valid_ctx_idx);
-	// Copy data to running ctx to valid ctx and adjust dram mappings
 	pr_ndckpt_restore("  valid_ctx_idx: %d\n", valid_ctx_idx);
 	pproc_print_regs(pproc, valid_ctx_idx);
-	pproc_restore_regs(regs, pproc, valid_ctx_idx);
+#endif
 
 	// Save original mm->pgd to pproc
 	// This is only valid while the power is on, so there is no need to flush.
@@ -979,17 +982,20 @@ int64_t pproc_restore(struct PersistentMemoryManager *pman,
 	// THIS IS FAKE: we set ctx[1] as valid to commit ctx[0]
 	pproc_set_valid_ctx(pproc, 1 - valid_ctx_idx);
 	mm->pgd = pproc->ctx[valid_ctx_idx].pgd;
+	pproc_restore_regs(regs, pproc, valid_ctx_idx);
 	pproc_commit(target, pproc, target->mm, regs);
 
 	// At this point, ctx[0] is commited and marked as valid,
 	// and ctx[1] is synced with ctx[0] and ready to go
 	pman_set_last_proc_info(pman, pproc);
 
-	// Sanity check...
+#ifdef DEBUG_PPROC_RESTORE
 	pr_ndckpt_pml4(mm->pgd);
 	pr_ndckpt_pml4(pproc->ctx[0].pgd);
 	pr_ndckpt_pml4(pproc->ctx[1].pgd);
 	print_target_vma_mapping(mm);
+#endif
+	// Sanity check...
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[0].pgd, mm->pgd));
 	BUG_ON(verify_pml4_kernel_map(pproc->ctx[1].pgd, mm->pgd));
 	return regs->ax;
