@@ -462,7 +462,7 @@ static inline void switch_mm_context(struct task_struct *target,
 #define ASSERT(x)
 #endif
 
-// #define DEBUG_SYNC_PAGES_PTE
+//#define DEBUG_SYNC_PAGES_PTE
 static inline void sync_pages_pte(struct mm_struct *mm,
 				  struct vm_area_struct *vma, pte_t *t,
 				  pte_t *ref_t, uint64_t addr, uint64_t end)
@@ -513,6 +513,7 @@ static inline void sync_pages_pte(struct mm_struct *mm,
 			if (prev_state == PAGE_STATE_X ||
 			    prev_state == PAGE_STATE_Pv) {
 				map_zeroed_nvdimm_page_page(e);
+				traverse_pte(addr, t, &e, &page_vaddr);
 			}
 			memcpy(page_vaddr, ref_page_vaddr, PAGE_SIZE);
 			// Following bits are only referenced in the power cycle, so no need to flush
@@ -524,6 +525,14 @@ static inline void sync_pages_pte(struct mm_struct *mm,
 }
 
 #define table_state_not_changed(s) (s == 0b0000 || s == 0b1010 || s == 0b1111)
+
+//#define DEBUG_NDCKPT_SYNC_PAGES_TABLES
+#ifdef DEBUG_NDCKPT_SYNC_PAGES_TABLES
+#define pr_ndckpt_sync_state_trans(addr, prev_state, next_state)               \
+	pr_ndckpt("%016llX: %d -> %d\n", addr, prev_state, next_state)
+#else
+#define pr_ndckpt_sync_state_trans(addr, prev_state, next_state)
+#endif
 
 #define def_sync_pages(ename, ctname, ttype, cttype, nextfunc)                     \
 	static inline void sync_pages_##ename(struct mm_struct *mm,                \
@@ -541,6 +550,8 @@ static inline void sync_pages_pte(struct mm_struct *mm,
 			traverse_##ename(addr, t, &e, &ct);                        \
 			prev_state = table_state_##ename(e);                       \
 			next_state = table_state_##ename(ref_e);                   \
+			pr_ndckpt_sync_state_trans(addr, prev_state,               \
+						   next_state);                    \
                                                                                    \
 			if (prev_state ^ next_state) {                             \
 				if (next_state == TABLE_STATE_X) {                 \
@@ -677,6 +688,17 @@ static void check_page_is_synced(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 
 		traverse_pte(addr, ref_t1, &ref_e1, &ref_page_vaddr);
 		traverse_pte(addr, t1, &e1, &page_vaddr);
+		if (page_state_pte(ref_e1) == PAGE_STATE_Pnc &&
+		    page_state_pte(e1) == PAGE_STATE_Pnd) {
+			// This is ok because allocated page in sync must be dirty.
+			if (memcmp(page_vaddr, ref_page_vaddr, PAGE_SIZE) !=
+			    0) {
+				pr_ndckpt("Page on NVDIMM data diff:\n");
+				check_failed(mm, t4, ref_t4, addr);
+			}
+			addr = next_pte_addr(addr);
+			continue;
+		}
 		if (page_state_pte(e1) != page_state_pte(ref_e1)) {
 			pr_ndckpt("state diff: expected %d but %d\n",
 				  page_state_pte(ref_e1), page_state_pte(e1));
@@ -840,13 +862,13 @@ static void mark_target_vmas(struct mm_struct *mm)
 		}
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
 			pr_ndckpt("  This is heap vma.\n");
-			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		if (vma->vm_start <= mm->start_stack &&
 		    mm->start_stack <= vma->vm_end) {
 			pr_ndckpt("  This is stack vma.\n");
-			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		pr_ndckpt("  This is UNKNOWN vma but writable.\n");
