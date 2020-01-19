@@ -590,8 +590,22 @@ static void sync_vmas(struct mm_struct *mm, pgd_t *dst_pgd, pgd_t *src_pgd)
 }
 
 #ifdef NDCKPT_DEBUG
-static void check_page_is_synced(pgd_t *t4, pgd_t *ref_t4, uint64_t start,
-				 uint64_t end)
+
+static void check_failed(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
+			 uint64_t addr)
+{
+	struct vm_area_struct *vma = find_vma(mm, addr);
+	pr_ndckpt("table:\n");
+	pr_ndckpt_pgtable_range(t4, addr, addr + 1);
+	pr_ndckpt("ref_table:\n");
+	pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
+	if (vma)
+		pr_ndckpt_vma(vma);
+	BUG();
+}
+
+static void check_page_is_synced(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
+				 uint64_t start, uint64_t end)
 {
 	// FOR DEBUG
 	uint64_t addr;
@@ -619,12 +633,7 @@ static void check_page_is_synced(pgd_t *t4, pgd_t *ref_t4, uint64_t start,
 		traverse_pml4e(addr, t4, &e4, &t3);
 		if (table_state_pml4e(e4) != table_state_pml4e(ref_e4)) {
 			pr_ndckpt("state diff:\n");
-			pr_ndckpt("t4:\n");
-			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
-			pr_ndckpt("state diff:\n");
-			pr_ndckpt("ref_t4:\n");
-			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
-			BUG();
+			check_failed(mm, t4, ref_t4, addr);
 		}
 		if (table_state_pml4e(e4) == TABLE_STATE_X) {
 			addr = next_pml4e_addr(addr);
@@ -632,24 +641,15 @@ static void check_page_is_synced(pgd_t *t4, pgd_t *ref_t4, uint64_t start,
 		}
 		if (table_state_pml4e(e4) == TABLE_STATE_Tv && t3 != ref_t3) {
 			pr_ndckpt("Tv mapping diff:\n");
-			pr_ndckpt("t4:\n");
-			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
-			pr_ndckpt("state diff:\n");
-			pr_ndckpt("ref_t4:\n");
-			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
-			BUG();
+			check_failed(mm, t4, ref_t4, addr);
 		}
 
 		traverse_pdpte(addr, ref_t3, &ref_e3, &ref_t2);
 		traverse_pdpte(addr, t3, &e3, &t2);
 		if (table_state_pdpte(e3) != table_state_pdpte(ref_e3)) {
+			check_failed(mm, t4, ref_t4, addr);
 			pr_ndckpt("state diff:\n");
-			pr_ndckpt("t4:\n");
-			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
-			pr_ndckpt("state diff:\n");
-			pr_ndckpt("ref_t4:\n");
-			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
-			BUG();
+			check_failed(mm, t4, ref_t4, addr);
 		}
 		if (table_state_pdpte(e3) == TABLE_STATE_X) {
 			addr = next_pdpte_addr(addr);
@@ -657,24 +657,14 @@ static void check_page_is_synced(pgd_t *t4, pgd_t *ref_t4, uint64_t start,
 		}
 		if (table_state_pdpte(e3) == TABLE_STATE_Tv && t2 != ref_t2) {
 			pr_ndckpt("Tv mapping diff:\n");
-			pr_ndckpt("t4:\n");
-			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
-			pr_ndckpt("state diff:\n");
-			pr_ndckpt("ref_t4:\n");
-			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
-			BUG();
+			check_failed(mm, t4, ref_t4, addr);
 		}
 
 		traverse_pde(addr, ref_t2, &ref_e2, &ref_t1);
 		traverse_pde(addr, t2, &e2, &t1);
 		if (table_state_pde(e2) != table_state_pde(ref_e2)) {
 			pr_ndckpt("state diff:\n");
-			pr_ndckpt("t4:\n");
-			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
-			pr_ndckpt("state diff:\n");
-			pr_ndckpt("ref_t4:\n");
-			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
-			BUG();
+			check_failed(mm, t4, ref_t4, addr);
 		}
 		if (table_state_pde(e2) == TABLE_STATE_X) {
 			addr = next_pde_addr(addr);
@@ -682,12 +672,7 @@ static void check_page_is_synced(pgd_t *t4, pgd_t *ref_t4, uint64_t start,
 		}
 		if (table_state_pde(e2) == TABLE_STATE_Tv && t1 != ref_t1) {
 			pr_ndckpt("Tv mapping diff:\n");
-			pr_ndckpt("t4:\n");
-			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
-			pr_ndckpt("state diff:\n");
-			pr_ndckpt("ref_t4:\n");
-			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
-			BUG();
+			check_failed(mm, t4, ref_t4, addr);
 		}
 
 		traverse_pte(addr, ref_t1, &ref_e1, &ref_page_vaddr);
@@ -695,12 +680,7 @@ static void check_page_is_synced(pgd_t *t4, pgd_t *ref_t4, uint64_t start,
 		if (page_state_pte(e1) != page_state_pte(ref_e1)) {
 			pr_ndckpt("state diff: expected %d but %d\n",
 				  page_state_pte(ref_e1), page_state_pte(e1));
-			pr_ndckpt("t4:\n");
-			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
-			pr_ndckpt("state diff:\n");
-			pr_ndckpt("ref_t4:\n");
-			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
-			BUG();
+			check_failed(mm, t4, ref_t4, addr);
 		}
 		if (page_state_pte(e1) == TABLE_STATE_X) {
 			addr = next_pte_addr(addr);
@@ -709,22 +689,11 @@ static void check_page_is_synced(pgd_t *t4, pgd_t *ref_t4, uint64_t start,
 		if (page_state_pte(e1) == PAGE_STATE_Pv &&
 		    page_vaddr != ref_page_vaddr) {
 			pr_ndckpt("Pv mapping diff:\n");
-			pr_ndckpt("t4:\n");
-			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
-			pr_ndckpt("state diff:\n");
-			pr_ndckpt("ref_t4:\n");
-			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
-			BUG();
 		}
 		if (IS_PAGE_STATE_ON_NVDIMM(page_state_pte(e1)) &&
 		    memcmp(page_vaddr, ref_page_vaddr, PAGE_SIZE) != 0) {
 			pr_ndckpt("Page on NVDIMM data diff:\n");
-			pr_ndckpt("t4:\n");
-			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
-			pr_ndckpt("state diff:\n");
-			pr_ndckpt("ref_t4:\n");
-			pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
-			BUG();
+			check_failed(mm, t4, ref_t4, addr);
 		}
 		addr = next_pte_addr(addr);
 	}
@@ -754,7 +723,7 @@ void pproc_commit(struct task_struct *target,
 		       next_running_ctx_idx);
 	sync_vmas(mm, pproc->ctx[next_running_ctx_idx].pgd,
 		  pproc->ctx[prev_running_ctx_idx].pgd);
-	check_page_is_synced(pproc->ctx[next_running_ctx_idx].pgd,
+	check_page_is_synced(mm, pproc->ctx[next_running_ctx_idx].pgd,
 			     pproc->ctx[prev_running_ctx_idx].pgd, 0,
 			     1ULL << 47);
 	// Finally, switch the cr3 to the new running context's pgd.
