@@ -11,8 +11,10 @@
 #define PCTX_REG_IDX_RDI 7
 #define PCTX_REG_IDX_RIP 16
 #define PCTX_REG_IDX_RFLAGS 17
-// gregs[16] + RIP + RFLAGS
-#define PCTX_REGS (16 + 1 + 1)
+#define PCTX_REG_IDX_FSBASE 18
+#define PCTX_REG_IDX_GSBASE 19
+// gregs[16] + RIP + RFLAGS + FS/GS
+#define PCTX_REGS (16 + 1 + 1 + 2)
 
 struct PersistentVMARange {
 	// Corresponds to vma->vm_start/end
@@ -111,6 +113,10 @@ void pproc_set_regs(struct PersistentProcessInfo *proc, int ctx_idx,
 	ctx->regs[15] = regs->r15;
 	ctx->regs[PCTX_REG_IDX_RIP] = regs->ip;
 	ctx->regs[PCTX_REG_IDX_RFLAGS] = regs->flags;
+	ctx->regs[PCTX_REG_IDX_FSBASE] = x86_fsbase_read_task(src);
+	ctx->regs[PCTX_REG_IDX_GSBASE] = x86_gsbase_read_task(src);
+	pr_ndckpt("fs: %016llX\n", ctx->regs[PCTX_REG_IDX_FSBASE]);
+	pr_ndckpt("gs: %016llX\n", ctx->regs[PCTX_REG_IDX_GSBASE]);
 	ndckpt_clwb_range(&ctx->regs[0], sizeof(ctx->regs));
 	ndckpt_sfence();
 }
@@ -205,6 +211,10 @@ void pproc_restore_regs(struct task_struct *dst,
 	regs->r15 = ctx->regs[15];
 	regs->ip = ctx->regs[PCTX_REG_IDX_RIP];
 	regs->flags = ctx->regs[PCTX_REG_IDX_RFLAGS];
+
+	// https://elixir.bootlin.com/linux/v5.1.3/source/arch/x86/kernel/process_64.c#L712
+	do_arch_prctl_64(dst, ARCH_SET_FS, ctx->regs[PCTX_REG_IDX_FSBASE]);
+	do_arch_prctl_64(dst, ARCH_SET_GS, ctx->regs[PCTX_REG_IDX_GSBASE]);
 }
 
 void pproc_save_vmas(struct PersistentProcessInfo *pproc, int ctx_idx,

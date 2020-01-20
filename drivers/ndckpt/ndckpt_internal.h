@@ -8,6 +8,8 @@
 #include <linux/timekeeping.h>
 #include <linux/ptrace.h>
 #include <linux/sched/task_stack.h>
+#include <asm/proto.h>
+#include <uapi/asm/prctl.h>
 
 #include "../nvdimm/pmem.h"
 
