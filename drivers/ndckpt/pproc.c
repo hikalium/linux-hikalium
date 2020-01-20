@@ -86,9 +86,10 @@ int pproc_get_running_ctx(struct PersistentProcessInfo *pproc)
 }
 
 void pproc_set_regs(struct PersistentProcessInfo *proc, int ctx_idx,
-		    struct pt_regs *regs)
+		    struct task_struct *src)
 {
 	// It assumes pt_regs is fully saved.
+	struct pt_regs *regs = task_pt_regs(src);
 	struct PersistentExecutionContext *ctx;
 	BUG_ON(ctx_idx < 0 || 2 <= ctx_idx);
 	ctx = &proc->ctx[ctx_idx];
@@ -178,10 +179,11 @@ static void pproc_restore_vmas(struct mm_struct *mm,
 	}
 }
 
-void pproc_restore_regs(struct pt_regs *regs,
+void pproc_restore_regs(struct task_struct *dst,
 			struct PersistentProcessInfo *proc, int ctx_idx)
 {
 	// It assumes pt_regs is fully saved.
+	struct pt_regs *regs = task_pt_regs(dst);
 	struct PersistentExecutionContext *ctx;
 	BUG_ON(ctx_idx < 0 || 2 <= ctx_idx);
 	ctx = &proc->ctx[ctx_idx];
@@ -887,7 +889,7 @@ void pproc_commit(struct task_struct *target,
 	mark_target_vmas(mm);
 	pproc_save_vmas(pproc, prev_running_ctx_idx, mm);
 
-	pproc_set_regs(pproc, prev_running_ctx_idx, regs);
+	pproc_set_regs(pproc, prev_running_ctx_idx, target);
 	flush_target_vmas(mm);
 	// TODO: Save vmas here
 	pr_ndckpt_ckpt("Ctx #%d has been committed\n", prev_running_ctx_idx);
@@ -1051,7 +1053,7 @@ int64_t pproc_init(struct task_struct *target,
 
 	mark_target_vmas(mm);
 	pproc_save_vmas(pproc, 0, mm);
-	pproc_set_regs(pproc, 0, regs);
+	pproc_set_regs(pproc, 0, target);
 	pproc_set_valid_ctx(pproc, 0); // dummy
 
 	return pproc_restore(pman, target, pproc);
@@ -1105,7 +1107,7 @@ int64_t pproc_restore(struct PersistentMemoryManager *pman,
 	// THIS IS FAKE: we set ctx[1] as valid to commit ctx[0]
 	pproc_set_valid_ctx(pproc, 1 - valid_ctx_idx);
 	mm->pgd = pproc->ctx[valid_ctx_idx].pgd;
-	pproc_restore_regs(regs, pproc, valid_ctx_idx);
+	pproc_restore_regs(target, pproc, valid_ctx_idx);
 	pproc_restore_vmas(mm, pproc, valid_ctx_idx);
 	pproc_commit(target, pproc, target->mm, regs);
 
