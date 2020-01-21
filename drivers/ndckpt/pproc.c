@@ -33,6 +33,7 @@ struct PersistentProcessInfo {
 		int vma_idx_data;
 		int end_vma_idx;
 		struct PersistentVMARange vmas[PCTX_NUM_OF_VMAS];
+		struct fpu fpu;
 	} ctx[2];
 	pgd_t *volatile org_pgd; // on DRAM
 	int valid_ctx_idx;
@@ -50,10 +51,12 @@ pgd_t *pproc_get_org_pgd(struct PersistentProcessInfo *pproc)
 	return pproc->org_pgd;
 }
 
-struct PersistentProcessInfo *pproc_alloc(void)
+static struct PersistentProcessInfo *
+pproc_alloc(struct PersistentMemoryManager *pman)
 {
-	struct PersistentProcessInfo *pproc = ndckpt_alloc_zeroed_page();
-	BUILD_BUG_ON((sizeof(struct PersistentProcessInfo) > PAGE_SIZE));
+	struct PersistentProcessInfo *pproc = pman_alloc_pages(
+		pman, (sizeof(struct PersistentProcessInfo) + PAGE_SIZE - 1) >>
+			      PAGE_SHIFT);
 	pproc->ctx[0].pgd = NULL;
 	pproc->ctx[1].pgd = NULL;
 	pproc->valid_ctx_idx = -1;
@@ -117,6 +120,8 @@ void pproc_set_regs(struct PersistentProcessInfo *proc, int ctx_idx,
 	ctx->regs[PCTX_REG_IDX_GSBASE] = x86_gsbase_read_task(src);
 	pr_ndckpt("fs: %016llX\n", ctx->regs[PCTX_REG_IDX_FSBASE]);
 	pr_ndckpt("gs: %016llX\n", ctx->regs[PCTX_REG_IDX_GSBASE]);
+	BUG_ON(!src->thread.fpu.initialized);
+	memcpy_and_clwb(&ctx->fpu, &src->thread.fpu, sizeof(ctx->fpu));
 	ndckpt_clwb_range(&ctx->regs[0], sizeof(ctx->regs));
 	ndckpt_sfence();
 }
@@ -185,6 +190,7 @@ static void pproc_restore_vmas(struct mm_struct *mm,
 	}
 }
 
+extern void fpu__restore(struct fpu *fpu);
 void pproc_restore_regs(struct task_struct *dst,
 			struct PersistentProcessInfo *proc, int ctx_idx)
 {
@@ -215,6 +221,11 @@ void pproc_restore_regs(struct task_struct *dst,
 	// https://elixir.bootlin.com/linux/v5.1.3/source/arch/x86/kernel/process_64.c#L712
 	do_arch_prctl_64(dst, ARCH_SET_FS, ctx->regs[PCTX_REG_IDX_FSBASE]);
 	do_arch_prctl_64(dst, ARCH_SET_GS, ctx->regs[PCTX_REG_IDX_GSBASE]);
+
+	BUG_ON(!dst->thread.fpu.initialized);
+	memcpy(&dst->thread.fpu, &ctx->fpu, sizeof(ctx->fpu));
+	dst->thread.fpu.last_cpu = -1;
+	fpu__restore(&dst->thread.fpu);
 }
 
 void pproc_save_vmas(struct PersistentProcessInfo *pproc, int ctx_idx,
@@ -1043,7 +1054,7 @@ int64_t pproc_init(struct task_struct *target,
 {
 	pgd_t *pgd_ctx0;
 	pgd_t *pgd_ctx1;
-	struct PersistentProcessInfo *pproc = pproc_alloc();
+	struct PersistentProcessInfo *pproc = pproc_alloc(pman);
 
 	BUG_ON(!pproc);
 	pr_ndckpt("pproc pobj #%lld\n", pobj_get_header(pproc)->id);

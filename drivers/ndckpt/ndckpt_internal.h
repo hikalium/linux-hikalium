@@ -353,7 +353,6 @@ void pobj_printk(struct PersistentObjectHeader *pobj);
 struct PersistentProcessInfo;
 bool pproc_is_valid(struct PersistentProcessInfo *pproc);
 pgd_t *pproc_get_org_pgd(struct PersistentProcessInfo *pproc);
-struct PersistentProcessInfo *pproc_alloc(void);
 void pproc_set_pgd(struct PersistentProcessInfo *pproc, int ctx_idx,
 		   pgd_t *pgd);
 void pproc_set_valid_ctx(struct PersistentProcessInfo *pproc, int ctx_idx);
