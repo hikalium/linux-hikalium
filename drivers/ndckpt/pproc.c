@@ -918,9 +918,11 @@ void pproc_commit(struct task_struct *target,
 		       next_running_ctx_idx);
 	sync_pages(mm, pproc->ctx[next_running_ctx_idx].pgd,
 		   pproc->ctx[prev_running_ctx_idx].pgd, 0, 1ULL << 47);
+#ifdef NDCKPT_DEBUG
 	check_page_is_synced(mm, pproc->ctx[next_running_ctx_idx].pgd,
 			     pproc->ctx[prev_running_ctx_idx].pgd, 0,
 			     1ULL << 47);
+#endif
 	// Finally, switch the cr3 to the new running context's pgd.
 	switch_mm_context(target, mm, pproc->ctx[next_running_ctx_idx].pgd);
 	spin_unlock(&pproc->ckpt_lock);
