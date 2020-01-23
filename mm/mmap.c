@@ -3296,6 +3296,10 @@ bool may_expand_vm(struct mm_struct *mm, vm_flags_t flags, unsigned long npages)
 		if (rlimit(RLIMIT_DATA) == 0 &&
 		    mm->data_vm + npages <= rlimit_max(RLIMIT_DATA) >> PAGE_SHIFT)
 			return true;
+#ifdef CONFIG_NDCKPT
+    // temp workaround
+    return true;
+#endif
 
 		pr_warn_once("%s (%d): VmData %lu exceed data ulimit %lu. Update limits%s.\n",
 			     current->comm, current->pid,

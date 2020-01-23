@@ -149,6 +149,7 @@ void ndckpt_notify_mmap_region(void)
 	struct PersistentProcessInfo *pproc;
 	if (!ndckpt_is_enabled_on_current())
 		return;
+	pr_ndckpt("mmap notified!\n");
 	pman = first_pmem_device->virt_addr;
 	pproc = pman->last_proc_info;
 	mark_target_vmas(current->mm);
@@ -266,10 +267,29 @@ EXPORT_SYMBOL(ndckpt__pte_alloc);
 
 int ndckpt_do_ndckpt(struct task_struct *target)
 {
+	int result;
 	BUG_ON(!task_is_traced(target));
-	return do_ndckpt(target);
+	pr_ndckpt("checkpoint begin\n");
+	result = do_ndckpt(target);
+	pr_ndckpt("checkpoint end\n");
+	return result;
 }
 EXPORT_SYMBOL(ndckpt_do_ndckpt);
+
+unsigned long ndckpt_move_page_tables(struct vm_area_struct *src_vma,
+				      uint64_t src_begin,
+				      struct vm_area_struct *dst_vma,
+				      uint64_t dst_begin, uint64_t size,
+				      bool need_rmap_locks)
+{
+	pr_ndckpt_mm_vma(dst_vma);
+	pr_ndckpt_mm_vma(src_vma);
+	ndckpt_move_pages(dst_vma, src_vma, dst_begin, src_begin, size);
+	pr_ndckpt_mm_vma(dst_vma);
+	pr_ndckpt_mm_vma(src_vma);
+	return size; // See move_page_tables() @ mm/mremap.c
+}
+EXPORT_SYMBOL(ndckpt_move_page_tables);
 
 static int __init ndckpt_module_init(void)
 {

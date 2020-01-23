@@ -15,6 +15,25 @@
 
 #include "ndckpt.h"
 
+#define pr_ndckpt_vma(vma)                                                     \
+	pr_ndckpt_body(__FUNCTION__, __FILE__, __LINE__,                       \
+		       "%s@0x%016llX [0x%016llX - 0x%016llX] 0x%016llX\n",     \
+		       #vma, (uint64_t)vma, (uint64_t)vma->vm_start,           \
+		       (uint64_t)vma->vm_end, (uint64_t)vma->vm_flags)
+
+#define pr_ndckpt_mm_vma(vma)                                                   \
+	pr_ndckpt_body(                                                         \
+		__FUNCTION__, __FILE__, __LINE__,                               \
+		"%s@0x%016llX [0x%016llX - 0x%016llX] 0x%016llX %c%c%c%c %s\n", \
+		#vma, (uint64_t)vma, (uint64_t)vma->vm_start,                   \
+		(uint64_t)vma->vm_end, (uint64_t)vma->vm_flags,                 \
+		vma->vm_file ? 'f' : '-',                                       \
+		(vma->vm_flags & VM_READ) ? 'r' : '-',                          \
+		(vma->vm_flags & VM_WRITE) ? 'w' : '-',                         \
+		(vma->vm_flags & VM_EXEC) ? 'x' : '-',                          \
+		(vma->vm_ckpt_flags & VM_CKPT_TARGET) ? "TARGET" :              \
+							"not target")
+
 static inline void ndckpt_sfence(void)
 {
 	asm volatile("sfence");

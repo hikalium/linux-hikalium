@@ -158,13 +158,14 @@ static void pproc_restore_vmas(struct mm_struct *mm,
 		if ((vma->vm_flags & VM_WRITE) == 0) {
 			continue;
 		}
-		if (vma->vm_file) {
+		if (vma->vm_file && ctx->vma_idx_data >= 0) {
 			pr_ndckpt("data vma\n");
 			pproc_restore_vm_area_struct(vma, ctx,
 						     ctx->vma_idx_data);
 			continue;
 		}
-		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
+		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk &&
+		    ctx->vma_idx_heap >= 0) {
 			pr_ndckpt("heap vma\n");
 			pproc_restore_vm_area_struct(vma, ctx,
 						     ctx->vma_idx_heap);
@@ -861,37 +862,33 @@ void mark_target_vmas(struct mm_struct *mm)
 	pr_ndckpt("mm->brk = 0x%016llX\n", (uint64_t)mm->brk);
 	pr_ndckpt("mm->start_brk = 0x%016llX\n", (uint64_t)mm->start_brk);
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		pr_ndckpt_vma(vma);
 		vma->vm_ckpt_flags = 0;
+		if ((vma->vm_flags & VM_WRITE) == 0) {
+			// No need to save readonly vma.
+			continue;
+		}
 		if (vma->vm_file) {
-			if ((vma->vm_flags & VM_WRITE) == 0) {
-				// No need to save readonly vma.
-				pr_ndckpt(
-					"  This vma is readonly and file backed. skip.\n");
-				continue;
-			}
-			pr_ndckpt("  This vma is .data\n");
+			// .data
 			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
-		if ((vma->vm_flags & VM_WRITE) == 0) {
-			// No need to save readonly vma.
-			pr_ndckpt("  This vma is readonly. skip.\n");
-			continue;
-		}
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
-			pr_ndckpt("  This is heap vma.\n");
+			// heap
 			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		if (vma->vm_start <= mm->start_stack &&
 		    mm->start_stack <= vma->vm_end) {
-			pr_ndckpt("  This is stack vma.\n");
+			// stack
 			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
-		pr_ndckpt("  This is writable ANONYMOUS vma.\n");
+		// anonymous
 		vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+	}
+	pr_ndckpt("vma marked as follows: \n");
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		pr_ndckpt_mm_vma(vma);
 	}
 }
 

@@ -63,12 +63,6 @@
 // struct mm_struct -> ndckpt_flags
 #define MM_NDCKPT_FLUSH_CR3 0x0001
 
-#define pr_ndckpt_vma(vma)                                                     \
-	pr_ndckpt_body(__FUNCTION__, __FILE__, __LINE__,                       \
-		       "%s@0x%016llX [0x%016llX - 0x%016llX] 0x%016llX\n",     \
-		       #vma, (uint64_t)vma, (uint64_t)vma->vm_start,           \
-		       (uint64_t)vma->vm_end, (uint64_t)vma->vm_flags)
-
 /*
 	struct vm_fault vmf = {
 		.vma = vma,
@@ -304,16 +298,11 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		       struct vm_area_struct *src_vma, uint64_t dst_start,
 		       uint64_t src_start, uint64_t size); // @pgtable.c
 
-static inline unsigned long
-ndckpt_move_page_tables(struct vm_area_struct *src_vma, uint64_t src_begin,
-			struct vm_area_struct *dst_vma, uint64_t dst_begin,
-			uint64_t size, bool need_rmap_locks)
-{
-	pr_ndckpt_vma(dst_vma);
-	pr_ndckpt_vma(src_vma);
-	ndckpt_move_pages(dst_vma, src_vma, dst_begin, src_begin, size);
-	return size; // See move_page_tables() @ mm/mremap.c
-}
+unsigned long ndckpt_move_page_tables(struct vm_area_struct *src_vma,
+				      uint64_t src_begin,
+				      struct vm_area_struct *dst_vma,
+				      uint64_t dst_begin, uint64_t size,
+				      bool need_rmap_locks); // @ndckpt.c
 
 int ndckpt_do_ndckpt(struct task_struct *target);
 
