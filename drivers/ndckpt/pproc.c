@@ -607,7 +607,6 @@ static inline void switch_mm_context(struct task_struct *target,
 #define ASSERT(x)
 #endif
 
-//#define DEBUG_SYNC_PAGES_PTE
 static inline void sync_pages_pte(struct mm_struct *mm, pte_t *t, pte_t *ref_t,
 				  uint64_t addr, uint64_t end)
 {
@@ -627,8 +626,10 @@ static inline void sync_pages_pte(struct mm_struct *mm, pte_t *t, pte_t *ref_t,
 			// (Pv, Pv) -> Shared. No need to sync
 			// (Pnc, Pnc) -> Clean. No need to sync
 			if (prev_state == PAGE_STATE_Pv &&
-			    page_vaddr != ref_page_vaddr) {
-#ifdef DEBUG_SYNC_PAGES_PTE
+			    (page_vaddr != ref_page_vaddr ||
+			     page_fixed_attr_pte(e) !=
+				     page_fixed_attr_pte(ref_e))) {
+#ifdef NDCKPT_PRINT_SYNC_PAGES
 				pr_ndckpt(
 					"%016llX: %d -> %d (update mapping)\n",
 					addr, prev_state, next_state);
@@ -637,26 +638,27 @@ static inline void sync_pages_pte(struct mm_struct *mm, pte_t *t, pte_t *ref_t,
 				copy_pte_and_clwb(e, ref_e);
 			}
 		} else if (next_state == PAGE_STATE_X) {
-#ifdef DEBUG_SYNC_PAGES_PTE
+#ifdef NDCKPT_PRINT_SYNC_PAGES
 			pr_ndckpt("%016llX: %d -> %d\n", addr, prev_state,
 				  next_state);
 #endif
 			unmap_page_and_clwb(e);
 		} else if (next_state == PAGE_STATE_Pv) {
-#ifdef DEBUG_SYNC_PAGES_PTE
+#ifdef NDCKPT_PRINT_SYNC_PAGES
 			pr_ndckpt("%016llX: %d -> %d ent@0x%016llX\n", addr,
 				  prev_state, next_state, ndckpt_v2p(e));
 #endif
 			unmap_page_and_clwb(e);
 			copy_pte_and_clwb(e, ref_e);
 		} else {
-#ifdef DEBUG_SYNC_PAGES_PTE
+#ifdef NDCKPT_PRINT_SYNC_PAGES
 			pr_ndckpt("%016llX: %d -> %d\n", addr, prev_state,
 				  next_state);
 #endif
 			if (prev_state == PAGE_STATE_X ||
 			    prev_state == PAGE_STATE_Pv) {
-				map_zeroed_nvdimm_page_page(e);
+				map_zeroed_nvdimm_page_page(
+					e, page_fixed_attr_pte(ref_e));
 				traverse_pte(addr, t, &e, &page_vaddr);
 			}
 			memcpy(page_vaddr, ref_page_vaddr, PAGE_SIZE);
@@ -705,7 +707,9 @@ static inline void sync_pages_pte(struct mm_struct *mm, pte_t *t, pte_t *ref_t,
 					/* ASSERT(next_state == TABLE_STATE_Tn);*/ \
 					BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(     \
 						e));                               \
-					map_zeroed_nvdimm_page_##ctname(e);        \
+					map_zeroed_nvdimm_page_##ctname(           \
+						e, table_fixed_attr_##ename(       \
+							   ref_e));                \
 					traverse_##ename(addr, t, &e, &ct);        \
 				}                                                  \
 			} else if (prev_state == TABLE_STATE_Tv &&                 \
@@ -734,7 +738,7 @@ static void sync_pages(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 	ndckpt_sfence();
 }
 
-#ifdef NDCKPT_DEBUG
+#ifdef NDCKPT_CHECK_SYNC_ON_COMMIT
 
 static void check_failed(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 			 uint64_t addr)
@@ -745,7 +749,7 @@ static void check_failed(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 	pr_ndckpt("ref_table:\n");
 	pr_ndckpt_pgtable_range(ref_t4, addr, addr + 1);
 	if (vma)
-		pr_ndckpt_vma(vma);
+		pr_ndckpt_mm_vma(vma);
 	BUG();
 }
 
@@ -773,6 +777,8 @@ static void check_page_is_synced(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 	pte_t *e1;
 	void *page_vaddr;
 
+	pr_ndckpt("SYNC CHECK BEGIN\n");
+
 	for (addr = start; addr < end;) {
 		traverse_pml4e(addr, ref_t4, &ref_e4, &ref_t3);
 		traverse_pml4e(addr, t4, &e4, &t3);
@@ -786,6 +792,14 @@ static void check_page_is_synced(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 		}
 		if (table_state_pml4e(e4) == TABLE_STATE_Tv && t3 != ref_t3) {
 			pr_ndckpt("Tv mapping diff:\n");
+			check_failed(mm, t4, ref_t4, addr);
+		}
+		if (table_fixed_attr_pml4e(e4) !=
+		    table_fixed_attr_pml4e(ref_e4)) {
+			pr_ndckpt(
+				"PML4E attr diff: 0x%016llX but expected 0x%016llX\n",
+				table_fixed_attr_pml4e(e4),
+				table_fixed_attr_pml4e(ref_e4));
 			check_failed(mm, t4, ref_t4, addr);
 		}
 
@@ -804,6 +818,14 @@ static void check_page_is_synced(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 			pr_ndckpt("Tv mapping diff:\n");
 			check_failed(mm, t4, ref_t4, addr);
 		}
+		if (table_fixed_attr_pdpte(e3) !=
+		    table_fixed_attr_pdpte(ref_e3)) {
+			pr_ndckpt(
+				"PDPTE attr diff: 0x%016llX but expected 0x%016llX\n",
+				table_fixed_attr_pdpte(e3),
+				table_fixed_attr_pdpte(ref_e3));
+			check_failed(mm, t4, ref_t4, addr);
+		}
 
 		traverse_pde(addr, ref_t2, &ref_e2, &ref_t1);
 		traverse_pde(addr, t2, &e2, &t1);
@@ -819,21 +841,21 @@ static void check_page_is_synced(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 			pr_ndckpt("Tv mapping diff:\n");
 			check_failed(mm, t4, ref_t4, addr);
 		}
+		if (table_fixed_attr_pde(e2) != table_fixed_attr_pde(ref_e2)) {
+			pr_ndckpt(
+				"PDE attr diff: 0x%016llX but expected 0x%016llX\n",
+				table_fixed_attr_pde(e2),
+				table_fixed_attr_pde(ref_e2));
+			check_failed(mm, t4, ref_t4, addr);
+		}
 
 		traverse_pte(addr, ref_t1, &ref_e1, &ref_page_vaddr);
 		traverse_pte(addr, t1, &e1, &page_vaddr);
-		if (page_state_pte(ref_e1) == PAGE_STATE_Pnc &&
-		    page_state_pte(e1) == PAGE_STATE_Pnd) {
-			// This is ok because allocated page in sync must be dirty.
-			if (memcmp(page_vaddr, ref_page_vaddr, PAGE_SIZE) !=
-			    0) {
-				pr_ndckpt("Page on NVDIMM data diff:\n");
-				check_failed(mm, t4, ref_t4, addr);
-			}
-			addr = next_pte_addr(addr);
-			continue;
-		}
-		if (page_state_pte(e1) != page_state_pte(ref_e1)) {
+
+		if ((page_state_pte(e1) != page_state_pte(ref_e1)) &&
+		    !(page_state_pte(ref_e1) == PAGE_STATE_Pnc &&
+		      page_state_pte(e1) == PAGE_STATE_Pnd)) {
+			// Latter case is ok because allocated page in sync must be dirty.
 			pr_ndckpt("state diff: expected %d but %d\n",
 				  page_state_pte(ref_e1), page_state_pte(e1));
 			check_failed(mm, t4, ref_t4, addr);
@@ -845,6 +867,14 @@ static void check_page_is_synced(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 		if (page_state_pte(e1) == PAGE_STATE_Pv &&
 		    page_vaddr != ref_page_vaddr) {
 			pr_ndckpt("Pv mapping diff:\n");
+			check_failed(mm, t4, ref_t4, addr);
+		}
+		if (page_fixed_attr_pte(e1) != page_fixed_attr_pte(ref_e1)) {
+			pr_ndckpt(
+				"Pv attr diff: 0x%016llX but expected 0x%016llX\n",
+				page_fixed_attr_pte(e1),
+				page_fixed_attr_pte(ref_e1));
+			check_failed(mm, t4, ref_t4, addr);
 		}
 		if (IS_PAGE_STATE_ON_NVDIMM(page_state_pte(e1)) &&
 		    memcmp(page_vaddr, ref_page_vaddr, PAGE_SIZE) != 0) {
@@ -853,6 +883,7 @@ static void check_page_is_synced(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 		}
 		addr = next_pte_addr(addr);
 	}
+	pr_ndckpt("SYNC CHECK END\n");
 }
 #endif
 
@@ -918,7 +949,7 @@ void pproc_commit(struct task_struct *target,
 		       next_running_ctx_idx);
 	sync_pages(mm, pproc->ctx[next_running_ctx_idx].pgd,
 		   pproc->ctx[prev_running_ctx_idx].pgd, 0, 1ULL << 47);
-#ifdef NDCKPT_DEBUG
+#ifdef NDCKPT_CHECK_SYNC_ON_COMMIT
 	check_page_is_synced(mm, pproc->ctx[next_running_ctx_idx].pgd,
 			     pproc->ctx[prev_running_ctx_idx].pgd, 0,
 			     1ULL << 47);

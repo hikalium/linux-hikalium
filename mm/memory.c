@@ -3530,7 +3530,7 @@ static vm_fault_t do_fault_around(struct vm_fault *vmf)
 
 	vmf->vma->vm_ops->map_pages(vmf, start_pgoff, end_pgoff);
 
-#ifdef CONFIG_NDCKPT
+#if defined(CONFIG_NDCKPT) && defined(NDCKPT_PRINT_FAULTS)
   if (current->flags & PF_NDCKPT_ENABLED &&
       (current->flags & PF_FORKNOEXEC) == 0) {
     pr_ndckpt("vm_ops->map_pages [0x%016lX, 0x%016lX)\n", vmf->vma->vm_start + (start_pgoff << PAGE_SHIFT), vmf->vma->vm_start + (end_pgoff << PAGE_SHIFT));

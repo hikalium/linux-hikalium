@@ -4,6 +4,13 @@
 #include <asm/pgalloc.h>
 
 //#define NDCKPT_DEBUG
+
+#ifdef NDCKPT_DEBUG
+#define NDCKPT_CHECK_SYNC_ON_COMMIT
+//#define NDCKPT_PRINT_FAULTS
+//#define NDCKPT_PRINT_SYNC_PAGES
+#endif
+
 #ifdef NDCKPT_DEBUG
 #define pr_ndckpt_body(func, file, line, fmt, ...)                             \
 	printk("ndckpt %10s@%10s:%3d]: " pr_fmt(fmt), func, file, line,        \
@@ -50,8 +57,7 @@
 #define pr_ndckpt_pgalloc(fmt, ...)
 #endif
 
-//#define NDCKPT_DEBUG_FAULT
-#ifdef NDCKPT_DEBUG_FAULT
+#ifdef NDCKPT_PRINT_FAULTS
 #define pr_ndckpt_fault(fmt, ...) pr_ndckpt(fmt, ##__VA_ARGS__)
 #else
 #define pr_ndckpt_fault(fmt, ...)
