@@ -95,7 +95,9 @@ int64_t ndckpt_handle_execve(struct task_struct *task)
 	mm = task->mm;
 	pr_ndckpt("pid = %d\n", task->pid);
 	if (task->ndckpt_id) {
-		return handle_execve_resotre(task, task->ndckpt_id);
+		int64_t retv = handle_execve_resotre(task, task->ndckpt_id);
+		pr_ndckpt("Restore done. return to user.\n");
+		return retv;
 	}
 	BUG_ON(pgtable_l5_enabled());
 	return pproc_init(task, pman, mm, regs);

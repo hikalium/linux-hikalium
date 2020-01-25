@@ -3,7 +3,7 @@
 
 #include <asm/pgalloc.h>
 
-//#define NDCKPT_DEBUG
+#define NDCKPT_DEBUG
 
 #ifdef NDCKPT_DEBUG
 #define NDCKPT_CHECK_SYNC_ON_COMMIT
