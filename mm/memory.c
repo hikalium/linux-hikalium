@@ -3963,12 +3963,14 @@ static vm_fault_t handle_pte_fault_ndckpt(struct vm_fault *vmf)
     // vmf->pte will be set by do_anonymous_page()
     BUG_ON(!vmf->pte);
     ndckpt__pte_alloc(vmf);
+    pr_ndckpt_fault("fault on anonymous page 0x%016lX. pte becomes 0x%016llX\n",
+        vmf->address, (uint64_t)vmf->pte->pte);
     return fault_code;
   }
   BUG_ON(!(vmf->vma->vm_flags & VM_WRITE));
   if (!vma_is_anonymous(vmf->vma) && !pte_write(*vmf->pte)) {
     // CoW
-    pr_ndckpt("CoW on non-anonymous page 0x%016lX\n", vmf->address);
+    pr_ndckpt_fault("CoW on non-anonymous page 0x%016lX\n", vmf->address);
     if(ndckpt_is_pte_points_nvdimm_page(*vmf->pte)) {
       pte_mkwrite(*vmf->pte);
       return 0;

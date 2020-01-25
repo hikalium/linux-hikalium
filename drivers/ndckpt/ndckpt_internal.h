@@ -159,24 +159,33 @@ static inline int page_state_pte(pte_t *e)
 	return page_state(e->pte);
 }
 
+#define PTE_FIXED_ATTR_MASK (~PTE_PFN_MASK & ~_PAGE_DIRTY & ~_PAGE_ACCESSED)
+
 static inline uint64_t table_fixed_attr_pml4e(pgd_t *e)
 {
-	return e->pgd & ~PTE_PFN_MASK & ~_PAGE_DIRTY & ~_PAGE_ACCESSED;
+	return e->pgd & PTE_FIXED_ATTR_MASK;
 }
 
 static inline uint64_t table_fixed_attr_pdpte(pud_t *e)
 {
-	return e->pud & ~PTE_PFN_MASK & ~_PAGE_DIRTY & ~_PAGE_ACCESSED;
+	return e->pud & PTE_FIXED_ATTR_MASK;
 }
 
 static inline uint64_t table_fixed_attr_pde(pmd_t *e)
 {
-	return e->pmd & ~PTE_PFN_MASK & ~_PAGE_DIRTY & ~_PAGE_ACCESSED;
+	return e->pmd & PTE_FIXED_ATTR_MASK;
 }
 
 static inline uint64_t page_fixed_attr_pte(pte_t *e)
 {
-	return e->pte & ~PTE_PFN_MASK & ~_PAGE_DIRTY & ~_PAGE_ACCESSED;
+	return e->pte & PTE_FIXED_ATTR_MASK;
+}
+
+static inline void sync_fixed_attr_pte(pte_t *dst, pte_t *src)
+{
+	dst->pte = (dst->pte & ~PTE_FIXED_ATTR_MASK) |
+		   (src->pte & PTE_FIXED_ATTR_MASK);
+	ndckpt_clwb(dst);
 }
 
 static inline void traverse_pml4e(uint64_t addr, pgd_t *t4, pgd_t **e4,

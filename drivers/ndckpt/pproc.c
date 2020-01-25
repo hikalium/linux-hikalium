@@ -661,6 +661,13 @@ static inline void sync_pages_pte(struct mm_struct *mm, pte_t *t, pte_t *ref_t,
 					e, page_fixed_attr_pte(ref_e));
 				traverse_pte(addr, t, &e, &page_vaddr);
 			}
+			if (page_fixed_attr_pte(e) !=
+			    page_fixed_attr_pte(ref_e)) {
+#ifdef NDCKPT_PRINT_SYNC_PAGES
+				pr_ndckpt("  attr synced\n");
+#endif
+				sync_fixed_attr_pte(e, ref_e);
+			}
 			memcpy(page_vaddr, ref_page_vaddr, PAGE_SIZE);
 			// Following bits are only referenced in the power cycle, so no need to flush
 			e->pte |= _PAGE_DIRTY;
@@ -866,12 +873,12 @@ static void check_page_is_synced(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 		}
 		if (page_state_pte(e1) == PAGE_STATE_Pv &&
 		    page_vaddr != ref_page_vaddr) {
-			pr_ndckpt("Pv mapping diff:\n");
+			pr_ndckpt("Page mapping diff:\n");
 			check_failed(mm, t4, ref_t4, addr);
 		}
 		if (page_fixed_attr_pte(e1) != page_fixed_attr_pte(ref_e1)) {
 			pr_ndckpt(
-				"Pv attr diff: 0x%016llX but expected 0x%016llX\n",
+				"Page attr diff: 0x%016llX but expected 0x%016llX\n",
 				page_fixed_attr_pte(e1),
 				page_fixed_attr_pte(ref_e1));
 			check_failed(mm, t4, ref_t4, addr);
