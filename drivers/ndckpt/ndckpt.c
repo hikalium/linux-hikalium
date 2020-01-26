@@ -33,21 +33,17 @@ int ndckpt_enable_checkpointing(struct task_struct *task, int restore_obj_id)
 }
 EXPORT_SYMBOL(ndckpt_enable_checkpointing);
 
-uint64_t ndckpt_alloc_phys_page(void)
+void *ndckpt_alloc_zeroed_virt_page(void)
 {
-	return ndckpt_virt_to_phys(
-		pman_alloc_pages(first_pmem_device->virt_addr, 1));
+	return pman_alloc_zeroed_pages(first_pmem_device->virt_addr, 1);
 }
-EXPORT_SYMBOL(ndckpt_alloc_phys_page);
+EXPORT_SYMBOL(ndckpt_alloc_zeroed_virt_page);
 
-void *ndckpt_alloc_zeroed_page(void)
+uint64_t ndckpt_alloc_zeroed_phys_page(void)
 {
-	void *page = pman_alloc_pages(first_pmem_device->virt_addr, 1);
-	memset(page, 0, PAGE_SIZE);
-	ndckpt_clwb_range(page, PAGE_SIZE);
-	return page;
+	return ndckpt_virt_to_phys(ndckpt_alloc_zeroed_virt_page());
 }
-EXPORT_SYMBOL(ndckpt_alloc_zeroed_page);
+EXPORT_SYMBOL(ndckpt_alloc_zeroed_phys_page);
 
 uint64_t ndckpt_virt_to_phys(void *vaddr)
 {
@@ -175,7 +171,7 @@ int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
   */
 	// Alloc on NVDIMM
 	// https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L4017
-	new = ndckpt_alloc_zeroed_page();
+	new = ndckpt_alloc_zeroed_virt_page();
 	if (!new)
 		return -EINVAL;
 	smp_wmb(); /* See comment in __pte_alloc */
@@ -209,7 +205,7 @@ int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address,
   */
 	// Alloc on NVDIMM
 	// https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L4017
-	new = ndckpt_alloc_zeroed_page();
+	new = ndckpt_alloc_zeroed_virt_page();
 	if (!new)
 		return -EINVAL;
 	smp_wmb(); /* See comment in __pte_alloc */
@@ -243,7 +239,7 @@ int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
 	if (likely(pmd_none(*pmd))) { /* Has another populated it ? */
 		//BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(pmd));
 		ndckpt_pmd_populate(mm, pmd,
-				    (pte_t *)ndckpt_alloc_zeroed_page());
+				    (pte_t *)ndckpt_alloc_zeroed_virt_page());
 		ndckpt_clwb(pmd);
 	}
 	return 0;
@@ -255,7 +251,7 @@ void ndckpt__pte_alloc(struct vm_fault *vmf)
 	// Alloc leaf pages
 	// See handle_pte_fault_ndckpt() @ mm/memory.c
 	uint64_t paddr;
-	paddr = ndckpt_virt_to_phys(ndckpt_alloc_zeroed_page());
+	paddr = ndckpt_virt_to_phys(ndckpt_alloc_zeroed_virt_page());
 	//pr_ndckpt("PMEM page mapped: 0x%016lX -> 0x%016llX\n", vmf->address, paddr);
 	// https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L2965
 	/* No need to invalidate - it was non-present before */

@@ -208,7 +208,7 @@ static ssize_t alloc_store(struct kobject *kobj, struct kobj_attribute *attr,
 	struct PersistentMemoryManager *pman = first_pmem_device->virt_addr;
 	sscanf(buf, "%d", &pages);
 	printk("ndckpt: alloc_store size=%d\n", pages);
-	vaddr = pman_alloc_pages(pman, pages);
+	vaddr = pman_alloc_zeroed_pages(pman, pages);
 	printk("ndckpt: alloc_store vaddr=0x%08llX\n", (uint64_t)vaddr);
 	return count;
 }

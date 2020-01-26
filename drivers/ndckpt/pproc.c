@@ -54,7 +54,7 @@ pgd_t *pproc_get_org_pgd(struct PersistentProcessInfo *pproc)
 static struct PersistentProcessInfo *
 pproc_alloc(struct PersistentMemoryManager *pman)
 {
-	struct PersistentProcessInfo *pproc = pman_alloc_pages(
+	struct PersistentProcessInfo *pproc = pman_alloc_zeroed_pages(
 		pman, (sizeof(struct PersistentProcessInfo) + PAGE_SIZE - 1) >>
 			      PAGE_SHIFT);
 	pproc->ctx[0].pgd = NULL;
@@ -1097,10 +1097,10 @@ int64_t pproc_init(struct task_struct *target,
 	pr_ndckpt("pproc pobj #%lld\n", pobj_get_header(pproc)->id);
 
 	// ctx 0 (This ctx will be valid first)
-	pgd_ctx0 = ndckpt_alloc_zeroed_page();
+	pgd_ctx0 = ndckpt_alloc_zeroed_virt_page();
 	pproc_set_pgd(pproc, 0, pgd_ctx0);
 	// ctx 1 (dummy)
-	pgd_ctx1 = ndckpt_alloc_zeroed_page();
+	pgd_ctx1 = ndckpt_alloc_zeroed_virt_page();
 	pproc_set_pgd(pproc, 1, pgd_ctx1);
 
 	// Setup non-volatile part of ctx0

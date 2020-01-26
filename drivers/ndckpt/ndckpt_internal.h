@@ -254,7 +254,7 @@ static inline uint64_t next_pte_addr(uint64_t addr)
 
 static inline void map_zeroed_nvdimm_page_pdpt(pgd_t *e, uint64_t attr)
 {
-	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	void *new_page_vaddr = ndckpt_alloc_zeroed_virt_page();
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	e->pgd = new_page_paddr | _PAGE_PRESENT | attr;
 	ndckpt_clwb(e);
@@ -262,7 +262,7 @@ static inline void map_zeroed_nvdimm_page_pdpt(pgd_t *e, uint64_t attr)
 
 static inline void map_zeroed_nvdimm_page_pd(pud_t *e, uint64_t attr)
 {
-	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	void *new_page_vaddr = ndckpt_alloc_zeroed_virt_page();
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	e->pud = new_page_paddr | _PAGE_PRESENT | attr;
 	ndckpt_clwb(e);
@@ -270,14 +270,14 @@ static inline void map_zeroed_nvdimm_page_pd(pud_t *e, uint64_t attr)
 
 static inline void map_zeroed_nvdimm_page_pt(pmd_t *e, uint64_t attr)
 {
-	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	void *new_page_vaddr = ndckpt_alloc_zeroed_virt_page();
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	e->pmd = new_page_paddr | _PAGE_PRESENT | attr;
 	ndckpt_clwb(e);
 }
 static inline void map_zeroed_nvdimm_page_page(pte_t *e, uint64_t attr)
 {
-	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	void *new_page_vaddr = ndckpt_alloc_zeroed_virt_page();
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	e->pte = new_page_paddr | _PAGE_PRESENT | _PAGE_DIRTY | attr;
 	ndckpt_clwb(e);
@@ -298,7 +298,7 @@ static inline void copy_pml4e_and_clwb(pgd_t *dst, pgd_t *src)
 static inline void replace_pdpt_with_nvdimm_page(pgd_t *ent_of_page)
 {
 	void *old_page_vaddr = (void *)ndckpt_pgd_page_vaddr(*ent_of_page);
-	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	void *new_page_vaddr = ndckpt_alloc_zeroed_virt_page();
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	if (old_page_vaddr)
 		memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
@@ -321,7 +321,7 @@ static inline void copy_pdpte_and_clwb(pud_t *dst, pud_t *src)
 static inline void replace_pd_with_nvdimm_page(pud_t *ent_of_page)
 {
 	void *old_page_vaddr = (void *)ndckpt_pud_page_vaddr(*ent_of_page);
-	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	void *new_page_vaddr = ndckpt_alloc_zeroed_virt_page();
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
 	ent_of_page->pud = (ent_of_page->pud & ~PTE_PFN_MASK) | new_page_paddr;
@@ -343,7 +343,7 @@ static inline void copy_pde_and_clwb(pmd_t *dst, pmd_t *src)
 static inline void replace_pt_with_nvdimm_page(pmd_t *ent_of_page)
 {
 	void *old_page_vaddr = (void *)ndckpt_pmd_page_vaddr(*ent_of_page);
-	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	void *new_page_vaddr = ndckpt_alloc_zeroed_virt_page();
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
 	ent_of_page->pmd = (ent_of_page->pmd & ~PTE_PFN_MASK) | new_page_paddr;
@@ -365,7 +365,7 @@ static inline void copy_pte_and_clwb(pte_t *dst, pte_t *src)
 static inline void replace_page_with_nvdimm_page(pte_t *ent_of_page)
 {
 	void *old_page_vaddr = (void *)ndckpt_page_page_vaddr(*ent_of_page);
-	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	void *new_page_vaddr = ndckpt_alloc_zeroed_virt_page();
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
 	ent_of_page->pte = (ent_of_page->pte & ~PTE_PFN_MASK) | new_page_paddr;
@@ -383,8 +383,8 @@ void pman_update_head(struct PersistentMemoryManager *pman,
 void pman_set_last_proc_info(struct PersistentMemoryManager *pman,
 			     struct PersistentProcessInfo *pproc);
 void pman_init(struct pmem_device *pmem);
-void *pman_alloc_pages(struct PersistentMemoryManager *pman,
-		       uint64_t num_of_pages_requested);
+void *pman_alloc_zeroed_pages(struct PersistentMemoryManager *pman,
+			      uint64_t num_of_pages_requested);
 void pman_printk(struct PersistentMemoryManager *pman);
 void pman_print_last_proc_info(struct PersistentMemoryManager *pman);
 

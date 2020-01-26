@@ -49,14 +49,15 @@ void pman_init(struct pmem_device *pmem)
 	printk("ndckpt: pman init done\n");
 }
 
-void *pman_alloc_pages(struct PersistentMemoryManager *pman,
-		       uint64_t num_of_pages_requested)
+void *pman_alloc_zeroed_pages(struct PersistentMemoryManager *pman,
+			      uint64_t num_of_pages_requested)
 {
 	struct PersistentObjectHeader *new_obj;
 	struct PersistentObjectHeader *const head = pman->head;
 	const uint64_t next_page_idx =
 		((uint64_t)pobj_get_base(head) >> kPageSizeExponent) +
 		head->num_of_pages;
+	void *addr;
 	if (num_of_pages_requested > pman->num_of_pages ||
 	    num_of_pages_requested + 1 + next_page_idx >=
 		    pman->page_idx + pman->num_of_pages) {
@@ -68,7 +69,11 @@ void *pman_alloc_pages(struct PersistentMemoryManager *pman,
 						    sizeof(*new_obj));
 	pobj_init(new_obj, head->id + 1, num_of_pages_requested, head);
 	pman_update_head(pman, new_obj);
-	return pobj_get_base(new_obj);
+	addr = pobj_get_base(new_obj);
+	memset(addr, 0, PAGE_SIZE * num_of_pages_requested);
+	ndckpt_clwb_range(addr, PAGE_SIZE * num_of_pages_requested);
+	ndckpt_sfence();
+	return addr;
 }
 
 void pman_printk(struct PersistentMemoryManager *pman)

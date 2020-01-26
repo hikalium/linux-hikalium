@@ -3,7 +3,7 @@
 
 #include <asm/pgalloc.h>
 
-#define NDCKPT_DEBUG
+//#define NDCKPT_DEBUG
 
 #ifdef NDCKPT_DEBUG
 #define NDCKPT_CHECK_SYNC_ON_COMMIT
@@ -81,10 +81,11 @@
 
 struct pmem_device;
 
+// @ndckpt.c
 void ndckpt_notify_pmem(struct pmem_device *pmem);
 int ndckpt_enable_checkpointing(struct task_struct *task, int restore_obj_id);
-uint64_t ndckpt_alloc_phys_page(void);
-void *ndckpt_alloc_zeroed_page(void);
+uint64_t ndckpt_alloc_zeroed_phys_page(void);
+void *ndckpt_alloc_zeroed_virt_page(void);
 uint64_t ndckpt_virt_to_phys(void *vaddr);
 void *ndckpt_phys_to_virt(uint64_t paddr);
 int ndckpt_is_phys_addr_in_nvdimm(uint64_t paddr);
@@ -289,7 +290,7 @@ static inline pte_t *ndckpt_pte_offset_kernel(pmd_t *pmd, unsigned long address)
 static inline void ndckpt_replace_page_with_nvdimm_page(pte_t *ent_of_page)
 {
 	void *old_page_vaddr = (void *)ndckpt_page_page_vaddr(*ent_of_page);
-	void *new_page_vaddr = ndckpt_alloc_zeroed_page();
+	void *new_page_vaddr = ndckpt_alloc_zeroed_virt_page();
 	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
 	memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
 	ent_of_page->pte = (ent_of_page->pte & ~PTE_PFN_MASK) | new_page_paddr;

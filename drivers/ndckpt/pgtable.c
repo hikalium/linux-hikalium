@@ -195,7 +195,7 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		}
 		if (!dst_t3 || !ndckpt_is_virt_addr_in_nvdimm(dst_t3)) {
 			// Alloc
-			tmp_page_addr = ndckpt_alloc_zeroed_page();
+			tmp_page_addr = ndckpt_alloc_zeroed_virt_page();
 			if (dst_t3) {
 				memcpy(tmp_page_addr, dst_t3, PAGE_SIZE);
 				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
@@ -216,7 +216,7 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		}
 		if (!dst_t2 || !ndckpt_is_virt_addr_in_nvdimm(dst_t2)) {
 			// Alloc
-			tmp_page_addr = ndckpt_alloc_zeroed_page();
+			tmp_page_addr = ndckpt_alloc_zeroed_virt_page();
 			if (dst_t2) {
 				memcpy(tmp_page_addr, dst_t2, PAGE_SIZE);
 				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
@@ -236,7 +236,7 @@ void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		}
 		if (!dst_t1 || !ndckpt_is_virt_addr_in_nvdimm(dst_t1)) {
 			// Alloc
-			tmp_page_addr = ndckpt_alloc_zeroed_page();
+			tmp_page_addr = ndckpt_alloc_zeroed_virt_page();
 			if (dst_t1) {
 				memcpy(tmp_page_addr, dst_t1, PAGE_SIZE);
 				ndckpt_clwb_range(tmp_page_addr, PAGE_SIZE);
