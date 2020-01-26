@@ -177,7 +177,8 @@ int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
 	smp_wmb(); /* See comment in __pte_alloc */
 	spin_lock(&mm->page_table_lock);
 	pud_phys = ndckpt_virt_to_phys(new);
-	pr_ndckpt_pgalloc("vaddr: 0x%016llX\n", (uint64_t) new);
+	pr_ndckpt_pgalloc("PDPT for 0x%016llX allocated on NVDIMM\n",
+			  (uint64_t)address);
 	paravirt_alloc_pud(mm, pud_phys >> PAGE_SHIFT);
 	BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(p4d));
 	set_p4d(p4d, __p4d(_PAGE_TABLE | pud_phys));
@@ -211,7 +212,8 @@ int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address,
 	smp_wmb(); /* See comment in __pte_alloc */
 	spin_lock(&mm->page_table_lock);
 	phys = ndckpt_virt_to_phys(new);
-	pr_ndckpt_pgalloc("vaddr: 0x%016llX\n", (uint64_t) new);
+	pr_ndckpt_pgalloc("PD for 0x%016llX allocated on NVDIMM\n",
+			  (uint64_t)address);
 	paravirt_alloc_pud(mm, phys >> PAGE_SHIFT);
 	BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(pud));
 	set_pud(pud, __pud(_PAGE_TABLE | phys));
@@ -222,7 +224,7 @@ int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address,
 EXPORT_SYMBOL(ndckpt___pmd_alloc);
 
 int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
-		       struct vm_area_struct *vma)
+		       struct vm_area_struct *vma, uint64_t address)
 {
 	// Alloc PT (4th page table structure)
 	if (!ndckpt_is_enabled_on_current()) {
@@ -240,28 +242,16 @@ int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
 		//BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(pmd));
 		ndckpt_pmd_populate(mm, pmd,
 				    (pte_t *)ndckpt_alloc_zeroed_virt_page());
+		pr_ndckpt_pgalloc(
+			"PT for 0x%016llX allocated on NVDIMM. pmd=0x%016llX\n",
+			address, (uint64_t)pmd->pmd);
 		ndckpt_clwb(pmd);
 	}
 	return 0;
 }
 EXPORT_SYMBOL(ndckpt___pte_alloc);
 
-void ndckpt__pte_alloc(struct vm_fault *vmf)
-{
-	// Alloc leaf pages
-	// See handle_pte_fault_ndckpt() @ mm/memory.c
-	uint64_t paddr;
-	paddr = ndckpt_virt_to_phys(ndckpt_alloc_zeroed_virt_page());
-	//pr_ndckpt("PMEM page mapped: 0x%016lX -> 0x%016llX\n", vmf->address, paddr);
-	// https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L2965
-	/* No need to invalidate - it was non-present before */
-	// Make dirty to be populated in another context on next checkpoint
-	*vmf->pte = pfn_pte(PHYS_PFN(paddr), vmf->vma->vm_page_prot);
-	vmf->pte->pte |= _PAGE_DIRTY;
-	ndckpt_clwb(vmf->pte);
-	ndckpt_invlpg((void *)vmf->address);
-}
-EXPORT_SYMBOL(ndckpt__pte_alloc);
+// Leaf pages are allocated in handle_pte_fault_ndckpt@mm/memory.c
 
 int ndckpt_do_ndckpt(struct task_struct *target)
 {

@@ -3,12 +3,13 @@
 
 #include <asm/pgalloc.h>
 
-//#define NDCKPT_DEBUG
+#define NDCKPT_DEBUG
 
 #ifdef NDCKPT_DEBUG
 #define NDCKPT_CHECK_SYNC_ON_COMMIT
-#define NDCKPT_PRINT_FAULTS
+//#define NDCKPT_PRINT_FAULTS
 #define NDCKPT_PRINT_SYNC_PAGES
+//#define NDCKPT_PRINT_PGTABLE_ALLOC
 #endif
 
 #ifdef NDCKPT_DEBUG
@@ -43,15 +44,13 @@
 #define pr_ndckpt_flush(fmt, ...)
 #endif
 
-//#define NDCKPT_DEBUG_PGTABLE
 #ifdef NDCKPT_DEBUG_PGTABLE
 #define pr_ndckpt_pgtable(fmt, ...) pr_ndckpt(fmt, ##__VA_ARGS__)
 #else
 #define pr_ndckpt_pgtable(fmt, ...)
 #endif
 
-//#define NDCKPT_DEBUG_PGSTRUCT_ALLOC
-#ifdef NDCKPT_DEBUG_PGSTRUCT_ALLOC
+#ifdef NDCKPT_PRINT_PGTABLE_ALLOC
 #define pr_ndckpt_pgalloc(fmt, ...) pr_ndckpt(fmt, ##__VA_ARGS__)
 #else
 #define pr_ndckpt_pgalloc(fmt, ...)
@@ -193,6 +192,8 @@ static inline unsigned long ndckpt_pmd_page_vaddr(pmd_t pmd)
 static inline unsigned long ndckpt_page_page_vaddr(pte_t pte)
 {
 	uint64_t paddr = pte_val(pte) & PTE_PFN_MASK;
+	if (!pte_present(pte))
+		return 0;
 	if (!ndckpt_is_phys_addr_in_nvdimm(paddr))
 		return (unsigned long)__va(paddr);
 	return (unsigned long long)ndckpt_phys_to_virt(paddr);
@@ -261,13 +262,14 @@ static inline pmd_t *ndckpt_pmd_alloc(struct mm_struct *mm, pud_t *pud,
 }
 
 int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
-		       struct vm_area_struct *vma);
+		       struct vm_area_struct *vma, uint64_t address);
 
 static inline int ndckpt_pte_alloc(struct mm_struct *mm, pmd_t *pmd,
-				   struct vm_area_struct *vma)
+				   struct vm_area_struct *vma, uint64_t address)
 {
 	// cf. pte_alloc @ include/linux/mm.h
-	return (unlikely(pmd_none(*pmd)) && ndckpt___pte_alloc(mm, pmd, vma));
+	return (unlikely(pmd_none(*pmd)) &&
+		ndckpt___pte_alloc(mm, pmd, vma, address));
 }
 
 static inline void ndckpt_pmd_populate(struct mm_struct *mm, pmd_t *pmd,
@@ -287,7 +289,19 @@ static inline pte_t *ndckpt_pte_offset_kernel(pmd_t *pmd, unsigned long address)
 	return (pte_t *)ndckpt_pmd_page_vaddr(*pmd) + pte_index(address);
 }
 
-static inline void ndckpt_replace_page_with_nvdimm_page(pte_t *ent_of_page)
+static inline void replace_pt_with_nvdimm_page(pmd_t *ent_of_page)
+{
+	void *old_page_vaddr = (void *)ndckpt_pmd_page_vaddr(*ent_of_page);
+	void *new_page_vaddr = ndckpt_alloc_zeroed_virt_page();
+	uint64_t new_page_paddr = ndckpt_virt_to_phys(new_page_vaddr);
+	if (old_page_vaddr)
+		memcpy_and_clwb(new_page_vaddr, old_page_vaddr, PAGE_SIZE);
+	ent_of_page->pmd = (ent_of_page->pmd & ~PTE_PFN_MASK) | new_page_paddr;
+	ndckpt_clwb(ent_of_page);
+}
+
+static inline void ndckpt_replace_page_with_nvdimm_page(pte_t *ent_of_page,
+							uint64_t vaddr)
 {
 	void *old_page_vaddr = (void *)ndckpt_page_page_vaddr(*ent_of_page);
 	void *new_page_vaddr = ndckpt_alloc_zeroed_virt_page();
@@ -297,9 +311,8 @@ static inline void ndckpt_replace_page_with_nvdimm_page(pte_t *ent_of_page)
 	pte_mkwrite(*ent_of_page);
 	pte_mkdirty(*ent_of_page);
 	ndckpt_clwb(ent_of_page);
+	ndckpt_invlpg((void *)vaddr);
 }
-
-void ndckpt__pte_alloc(struct vm_fault *vmf);
 
 void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		       struct vm_area_struct *src_vma, uint64_t dst_start,
@@ -310,6 +323,9 @@ unsigned long ndckpt_move_page_tables(struct vm_area_struct *src_vma,
 				      struct vm_area_struct *dst_vma,
 				      uint64_t dst_begin, uint64_t size,
 				      bool need_rmap_locks); // @ndckpt.c
+
+void pr_ndckpt_pgtable_range(pgd_t *t4, uint64_t start,
+			     uint64_t end); // @pgtable.c
 
 int ndckpt_do_ndckpt(struct task_struct *target);
 

@@ -172,7 +172,7 @@ static void pproc_restore_vmas(struct mm_struct *mm,
 			continue;
 		}
 		if (vma->vm_start <= mm->start_stack &&
-		    mm->start_stack <= vma->vm_end) {
+		    mm->start_stack <= vma->vm_end && ctx->vma_idx_stack >= 0) {
 			pr_ndckpt("stack vma\n");
 			pproc_restore_vm_area_struct(vma, ctx,
 						     ctx->vma_idx_stack);
@@ -907,18 +907,18 @@ void mark_target_vmas(struct mm_struct *mm)
 		}
 		if (vma->vm_file) {
 			// .data
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
 			// heap
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		if (vma->vm_start <= mm->start_stack &&
 		    mm->start_stack <= vma->vm_end) {
 			// stack
-			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		// anonymous

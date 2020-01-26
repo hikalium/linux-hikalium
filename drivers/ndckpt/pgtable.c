@@ -148,6 +148,7 @@ void pr_ndckpt_pgtable_range(pgd_t *t4, uint64_t start, uint64_t end)
 		addr = next_pte_addr(addr);
 	}
 }
+EXPORT_SYMBOL(pr_ndckpt_pgtable_range);
 
 void ndckpt_move_pages(struct vm_area_struct *dst_vma,
 		       struct vm_area_struct *src_vma, uint64_t dst_start,
