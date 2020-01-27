@@ -245,7 +245,7 @@ void pproc_save_vmas(struct PersistentProcessInfo *pproc, int ctx_idx,
 
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 		pr_ndckpt_vma(vma);
-		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
+		if (!ndckpt_is_target_vma(vma)) {
 			pr_ndckpt("  This is not a target. skip.\n");
 			continue;
 		}
@@ -473,13 +473,9 @@ static void flush_dirty_pages(pgd_t *t4, uint64_t start, uint64_t end)
 		}
 		page_paddr = ndckpt_v2p(page_vaddr);
 		if (!ndckpt_is_virt_addr_in_nvdimm(page_vaddr)) {
-			if (!pte_write(*e1)) {
-				// Read only, before CoW. Skip flush.
-				addr = next_pte_addr(addr);
-				continue;
-			}
-			pr_ndckpt_pgtable_range(t4, addr, addr + 1);
-			BUG();
+			// TODO: This solution is ad-hoc. We should handle this on fault
+			ndckpt_replace_page_with_nvdimm_page(e1, addr);
+			continue; // retry
 		}
 		if ((e1->pte & _PAGE_DIRTY) == 0) {
 			// Page is clean. Skip flushing
@@ -536,7 +532,7 @@ static void erase_dram_mappings(pgd_t *t4, uint64_t start, uint64_t end)
 		}
 		traverse_pte(addr, t1, &e1, &page_vaddr);
 		if (!ndckpt_is_virt_addr_in_nvdimm(page_vaddr)) {
-			unmap_page_and_clwb(e1);
+			unmap_page_and_clwb(e1, addr);
 		}
 		addr = next_pte_addr(addr);
 	}
@@ -548,11 +544,52 @@ static void erase_dram_mappings(pgd_t *t4, uint64_t start, uint64_t end)
 #endif
 }
 
+void ndckpt_erase_page_mappings(pgd_t *t4, uint64_t start, uint64_t end)
+{
+	uint64_t addr;
+	pgd_t *e4;
+	pud_t *t3 = NULL;
+	pud_t *e3;
+	pmd_t *t2 = NULL;
+	pmd_t *e2;
+	pte_t *t1 = NULL;
+	pte_t *e1;
+	void *page_vaddr;
+	pr_ndckpt("erase page mappings in [0x%016llX - 0x%016llX)\n", start,
+		  end);
+	for (addr = start; addr < end;) {
+		traverse_pml4e(addr, t4, &e4, &t3);
+		if (!t3) {
+			addr = next_pml4e_addr(addr);
+			continue;
+		}
+		traverse_pdpte(addr, t3, &e3, &t2);
+		if (!t2) {
+			addr = next_pdpte_addr(addr);
+			continue;
+		}
+		traverse_pde(addr, t2, &e2, &t1);
+		if (!t1) {
+			addr = next_pde_addr(addr);
+			continue;
+		}
+		traverse_pte(addr, t1, &e1, &page_vaddr);
+		if (!page_vaddr) {
+			addr = next_pte_addr(addr);
+			continue;
+		}
+		unmap_page_and_clwb(e1, addr);
+		addr = next_pte_addr(addr);
+	}
+	ndckpt_sfence();
+}
+EXPORT_SYMBOL(ndckpt_erase_page_mappings);
+
 static void flush_target_vmas(struct mm_struct *mm)
 {
 	struct vm_area_struct *vma;
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
+		if (!ndckpt_is_target_vma(vma)) {
 			continue;
 		}
 		flush_dirty_pages(mm->pgd, vma->vm_start, vma->vm_end);
@@ -567,7 +604,7 @@ static void sync_normal_vmas(struct mm_struct *mm, pgd_t *dst_pgd,
 	struct vm_area_struct *vma;
 	erase_dram_mappings(dst_pgd, 0, 1ULL << 47);
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) != 0) {
+		if (ndckpt_is_target_vma(vma)) {
 			continue;
 		}
 		sync_dram_pages(dst_pgd, src_pgd, vma->vm_start, vma->vm_end,
@@ -642,13 +679,13 @@ static inline void sync_pages_pte(struct mm_struct *mm, pte_t *t, pte_t *ref_t,
 			pr_ndckpt("%016llX: %d -> %d\n", addr, prev_state,
 				  next_state);
 #endif
-			unmap_page_and_clwb(e);
+			unmap_page_and_clwb(e, addr);
 		} else if (next_state == PAGE_STATE_Pv) {
 #ifdef NDCKPT_PRINT_SYNC_PAGES
 			pr_ndckpt("%016llX: %d -> %d ent@0x%016llX\n", addr,
 				  prev_state, next_state, ndckpt_v2p(e));
 #endif
-			unmap_page_and_clwb(e);
+			unmap_page_and_clwb(e, addr);
 			copy_pte_and_clwb(e, ref_e);
 		} else {
 #ifdef NDCKPT_PRINT_SYNC_PAGES
@@ -888,6 +925,14 @@ static void check_page_is_synced(struct mm_struct *mm, pgd_t *t4, pgd_t *ref_t4,
 			pr_ndckpt("Page on NVDIMM data diff:\n");
 			check_failed(mm, t4, ref_t4, addr);
 		}
+		if (IS_PAGE_STATE_ON_NVDIMM(page_state_pte(e1)) &&
+		    (table_state_pde(e2) == TABLE_STATE_Tv ||
+		     table_state_pdpte(e3) == TABLE_STATE_Tv ||
+		     table_fixed_attr_pml4e(e4) == TABLE_STATE_Tv)) {
+			pr_ndckpt(
+				"Page on NVDIMM but some tables are on DRAM:\n");
+			check_failed(mm, t4, ref_t4, addr);
+		}
 		addr = next_pte_addr(addr);
 	}
 	pr_ndckpt("SYNC CHECK END\n");
@@ -907,18 +952,18 @@ void mark_target_vmas(struct mm_struct *mm)
 		}
 		if (vma->vm_file) {
 			// .data
-			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) {
 			// heap
-			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		if (vma->vm_start <= mm->start_stack &&
 		    mm->start_stack <= vma->vm_end) {
 			// stack
-			//vma->vm_ckpt_flags |= VM_CKPT_TARGET;
+			vma->vm_ckpt_flags |= VM_CKPT_TARGET;
 			continue;
 		}
 		// anonymous
@@ -1077,7 +1122,7 @@ static void fix_pmem_part_of_ctx(struct mm_struct *mm,
 	replace_pages_with_nvdimm(pproc->ctx[idx].pgd, 0, 1ULL << 47, true);
 	// Replace leaf pages in target vma
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
+		if (!ndckpt_is_target_vma(vma)) {
 			continue;
 		}
 		replace_pages_with_nvdimm(pproc->ctx[idx].pgd, vma->vm_start,
@@ -1123,7 +1168,7 @@ static void print_target_vma_mapping(struct mm_struct *mm)
 {
 	struct vm_area_struct *vma;
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if ((vma->vm_ckpt_flags & VM_CKPT_TARGET) == 0) {
+		if (!ndckpt_is_target_vma(vma)) {
 			continue;
 		}
 		pr_ndckpt_vma(vma);

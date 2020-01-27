@@ -3,12 +3,12 @@
 
 #include <asm/pgalloc.h>
 
-#define NDCKPT_DEBUG
+//#define NDCKPT_DEBUG
 
 #ifdef NDCKPT_DEBUG
 #define NDCKPT_CHECK_SYNC_ON_COMMIT
 //#define NDCKPT_PRINT_FAULTS
-#define NDCKPT_PRINT_SYNC_PAGES
+//#define NDCKPT_PRINT_SYNC_PAGES
 //#define NDCKPT_PRINT_PGTABLE_ALLOC
 #endif
 
@@ -328,5 +328,8 @@ void pr_ndckpt_pgtable_range(pgd_t *t4, uint64_t start,
 			     uint64_t end); // @pgtable.c
 
 int ndckpt_do_ndckpt(struct task_struct *target);
+
+void ndckpt_erase_page_mappings(pgd_t *t4, uint64_t start,
+				uint64_t end); // @pproc.c
 
 #endif /* __NDCKPT_H__ */

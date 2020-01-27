@@ -1391,15 +1391,13 @@ static void unmap_single_vma(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	if (unlikely(vma->vm_flags & VM_PFNMAP))
 		untrack_pfn(vma, 0, 0);
 
-#ifdef CONFIG_NDCKPT
-	if (vma->vm_ckpt_flags & VM_CKPT_TARGET) {
-		pr_ndckpt("unmap_single_vma: ignore 0x%016lX - 0x%016lX\n",
-			  start, end);
-		return;
-	}
-#endif
-
 	if (start != end) {
+#ifdef CONFIG_NDCKPT
+		if (ndckpt_is_target_vma(vma)) {
+			ndckpt_erase_page_mappings(vma->vm_mm->pgd, start, end);
+			return;
+		}
+#endif
 		if (unlikely(is_vm_hugetlb_page(vma))) {
 			/*
 			 * It is undesirable to test vma->vm_file as it
@@ -3550,8 +3548,7 @@ static vm_fault_t do_fault_around(struct vm_fault *vmf)
 	vmf->vma->vm_ops->map_pages(vmf, start_pgoff, end_pgoff);
 
 #if defined(CONFIG_NDCKPT) && defined(NDCKPT_PRINT_FAULTS)
-	if (current->flags & PF_NDCKPT_ENABLED &&
-	    (current->flags & PF_FORKNOEXEC) == 0) {
+	if (ndckpt_is_enabled_on_current()) {
 		pr_ndckpt("vm_ops->map_pages [0x%016lX, 0x%016lX)\n",
 			  vmf->vma->vm_start + (start_pgoff << PAGE_SHIFT),
 			  vmf->vma->vm_start + (end_pgoff << PAGE_SHIFT));
@@ -3958,7 +3955,8 @@ unlock:
 
 #ifdef CONFIG_NDCKPT
 
-static inline void validate_pgtable_for_ndckpt(struct vm_fault *vmf, int case_id)
+static inline void validate_pgtable_for_ndckpt(struct vm_fault *vmf,
+					       int case_id)
 {
 	pgd_t *pgd;
 	BUG_ON(!vmf || !vmf->vma || !vmf->vma->vm_mm);
@@ -3985,9 +3983,6 @@ static vm_fault_t handle_pte_fault_ndckpt(struct vm_fault *vmf)
 	    !ndckpt_is_target_vma(vmf->vma)) {
 		return handle_pte_fault_body(vmf);
 	}
-  if(vma_is_anonymous(vmf->vma)) {
-    return handle_pte_fault_body(vmf);
-  }
 	if (!vmf->pte) {
 		if (!vma_is_anonymous(vmf->vma)) {
 			pr_ndckpt_fault(
@@ -4003,9 +3998,6 @@ static vm_fault_t handle_pte_fault_ndckpt(struct vm_fault *vmf)
 			return fault_code;
 		}
 		BUG_ON(!vma_is_anonymous(vmf->vma));
-		if (ndckpt_pte_alloc(vmf->vma->vm_mm, vmf->pmd, vmf->vma,
-				     vmf->address))
-			return VM_FAULT_OOM;
 		if ((fault_code = do_anonymous_page(vmf)))
 			return fault_code;
 		// vmf->pte will be set by do_anonymous_page()

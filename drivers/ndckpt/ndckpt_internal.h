@@ -31,8 +31,7 @@
 		(vma->vm_flags & VM_READ) ? 'r' : '-',                          \
 		(vma->vm_flags & VM_WRITE) ? 'w' : '-',                         \
 		(vma->vm_flags & VM_EXEC) ? 'x' : '-',                          \
-		(vma->vm_ckpt_flags & VM_CKPT_TARGET) ? "TARGET" :              \
-							"not target")
+		(ndckpt_is_target_vma(vma)) ? "TARGET" : "not target")
 
 static inline void ndckpt_sfence(void)
 {
@@ -47,12 +46,6 @@ static inline const char *get_str_dram_or_nvdimm(void *p)
 static inline const char *get_str_dram_or_nvdimm_phys(uint64_t p)
 {
 	return ndckpt_is_phys_addr_in_nvdimm(p) ? "NVDIMM" : ">DRAM<";
-}
-
-static inline bool is_vma_ndckpt_target(struct vm_area_struct *vma)
-{
-	BUG_ON(!vma);
-	return vma->vm_ckpt_flags & VM_CKPT_TARGET;
 }
 
 #define POBJ_SIGNATURE 0x4F50534F6D75696CULL
@@ -341,10 +334,11 @@ static inline void copy_pde_and_clwb(pmd_t *dst, pmd_t *src)
 	ndckpt_clwb(dst);
 }
 
-static inline void unmap_page_and_clwb(pte_t *ent_of_page)
+static inline void unmap_page_and_clwb(pte_t *ent_of_page, uint64_t addr)
 {
 	ent_of_page->pte = 0;
 	ndckpt_clwb(ent_of_page);
+	ndckpt_invlpg((void *)addr);
 }
 
 static inline void copy_pte_and_clwb(pte_t *dst, pte_t *src)

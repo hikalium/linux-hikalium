@@ -163,12 +163,6 @@ int ndckpt___pud_alloc(struct mm_struct *mm, p4d_t *p4d, unsigned long address,
 	if (!ndckpt_is_enabled_on_current()) {
 		return __pud_alloc(mm, p4d, address);
 	}
-	/*
-	if (!is_vma_ndckpt_target(vma)) {
-		// Alloc on DRAM
-		return __pud_alloc(mm, p4d, address);
-	}
-  */
 	// Alloc on NVDIMM
 	// https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L4017
 	new = ndckpt_alloc_zeroed_virt_page();
@@ -198,12 +192,6 @@ int ndckpt___pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address,
 		// Alloc on DRAM
 		return __pmd_alloc(mm, pud, address);
 	}
-	/*
-	if (!is_vma_ndckpt_target(vma)) {
-		// Alloc on DRAM
-		return __pmd_alloc(mm, pud, address);
-	}
-  */
 	// Alloc on NVDIMM
 	// https://elixir.bootlin.com/linux/v5.1.3/source/mm/memory.c#L4017
 	new = ndckpt_alloc_zeroed_virt_page();
@@ -231,12 +219,6 @@ int ndckpt___pte_alloc(struct mm_struct *mm, pmd_t *pmd,
 		// Alloc on DRAM
 		return __pte_alloc(mm, pmd);
 	}
-	/*
-	if (!is_vma_ndckpt_target(vma)) {
-		// Alloc on DRAM
-		return __pte_alloc(mm, pmd);
-	}
-  */
 	smp_wmb(); /* Could be smp_wmb__xxx(before|after)_spin_lock */
 	if (likely(pmd_none(*pmd))) { /* Has another populated it ? */
 		//BUG_ON(!ndckpt_is_virt_addr_in_nvdimm(pmd));
@@ -270,6 +252,8 @@ unsigned long ndckpt_move_page_tables(struct vm_area_struct *src_vma,
 				      uint64_t dst_begin, uint64_t size,
 				      bool need_rmap_locks)
 {
+	pr_ndckpt(
+		"ndckpt_move_page_tables!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
 	pr_ndckpt_mm_vma(dst_vma);
 	pr_ndckpt_mm_vma(src_vma);
 	ndckpt_move_pages(dst_vma, src_vma, dst_begin, src_begin, size);
